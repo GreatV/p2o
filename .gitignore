@@ -1,0 +1,7 @@
+/target
+*.onnx
+*.pdiparams
+PP-OCRv5_*_infer/
+scripts/data/
+*.bak
+/refactor*.py
