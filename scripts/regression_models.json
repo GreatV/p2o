@@ -1,0 +1,328 @@
+{
+  "models": [
+    {
+      "name": "ppocrv5_det",
+      "model_dir": "../inference_models/PP-OCRv5_server_det_infer",
+      "default_opsets": [17],
+      "input_kind": "det",
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 640, 640],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv5_rec",
+      "model_dir": "../inference_models/PP-OCRv5_server_rec_infer",
+      "default_opsets": [17],
+      "input_kind": "rec",
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 48, 320],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "slanet",
+      "model_dir": "../inference_models/SLANet_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 488, 488],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppdoclayout_plus_l",
+      "model_dir": "../inference_models/PP-DocLayout_plus-L_infer",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 800, 800],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "im_shape": {
+          "value": [[800.0, 800.0]],
+          "dtype": "float32"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      }
+    },
+    {
+      "name": "ppdoclayoutv2",
+      "model_dir": "../inference_models/PP-DocLayoutV2_infer",
+      "semantic_baseline": "baselines/ppdoclayoutv2_opset17_seed20260412_semantic.npz",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 800, 800],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "im_shape": {
+          "value": [[800.0, 800.0]],
+          "dtype": "float32"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      },
+      "compare_config": {
+        "mode": "instance_row_match",
+        "key_output": 0,
+        "reorder_outputs": [0],
+        "sort_columns": [0, 1, 2, 3, 4, 5],
+        "match_columns": [0, 1, 2, 3, 4, 5],
+        "exact_columns": [0],
+        "round_decimals": 6,
+        "per_output": {
+          "0": {
+            "permutation_columns": [6, 7]
+          }
+        }
+      }
+    },
+    {
+      "name": "ppdoclayoutv3",
+      "model_dir": "../inference_models/PP-DocLayoutV3_infer",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 800, 800],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "im_shape": {
+          "value": [[800.0, 800.0]],
+          "dtype": "float32"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      },
+      "compare_config": {
+        "mode": "instance_row_match",
+        "key_output": 0,
+        "reorder_outputs": [0, 2],
+        "sort_columns": [0, 1, 2, 3, 4, 5],
+        "match_columns": [0, 1, 2, 3, 4, 5],
+        "exact_columns": [0],
+        "tie_group_columns": [0, 1, 2, 3, 4, 5],
+        "tie_aware_outputs": [2],
+        "round_decimals": 6,
+        "per_output": {
+          "0": {
+            "permutation_columns": [6]
+          },
+          "2": {
+            "int_tolerance": {
+              "max_abs": 1,
+              "mean_abs": 1e-5
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "slanext_wired",
+      "model_dir": "../inference_models/SLANeXt_wired_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 512, 512],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "slanext_wireless",
+      "model_dir": "../inference_models/SLANeXt_wireless_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 512, 512],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppformulanet_l",
+      "model_dir": "../inference_models/PP-FormulaNet-L_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 1, 768, 768],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppformulanet_plus_l",
+      "model_dir": "../inference_models/PP-FormulaNet_plus-L_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 1, 768, 768],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "latex_ocr",
+      "model_dir": "../inference_models/LaTeX_OCR_rec_infer",
+      "semantic_baseline": "baselines/latex_ocr_opset17_seed20260412_semantic.npz",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 1, 192, 672],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "uvdoc",
+      "model_dir": "../inference_models/UVDoc_infer",
+      "default_opsets": [17],
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 256, 128],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "unimernet",
+      "model_dir": "../inference_models/UniMERNet_infer",
+      "default_opsets": [17],
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 1, 192, 672],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "picodet_layout_1x",
+      "model_dir": "../inference_models/PicoDet_layout_1x_infer",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 800, 608],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      }
+    },
+    {
+      "name": "rtdetr_h_layout_17cls",
+      "model_dir": "../inference_models/RT-DETR-H_layout_17cls_infer",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 640, 640],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "im_shape": {
+          "value": [[640.0, 640.0]],
+          "dtype": "float32"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      },
+      "compare_config": {
+        "mode": "instance_row_match",
+        "key_output": 0,
+        "reorder_outputs": [0],
+        "sort_columns": [0, 2, 3, 4, 5, 1],
+        "match_columns": [0, 2, 3, 4, 5],
+        "exact_columns": [0],
+        "round_decimals": 4
+      }
+    },
+    {
+      "name": "rtdetr_l_wired_table_cell_det",
+      "model_dir": "../inference_models/RT-DETR-L_wired_table_cell_det_infer",
+      "default_opsets": [17],
+      "input_kind": "layout",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "image": {
+          "shape": [1, 3, 640, 640],
+          "dtype": "float32",
+          "mode": "randn"
+        },
+        "im_shape": {
+          "value": [[640.0, 640.0]],
+          "dtype": "float32"
+        },
+        "scale_factor": {
+          "value": [[1.0, 1.0]],
+          "dtype": "float32"
+        }
+      },
+      "compare_config": {
+        "mode": "instance_row_match",
+        "key_output": 0,
+        "reorder_outputs": [0],
+        "sort_columns": [0, 2, 3, 4, 5, 1],
+        "match_columns": [0, 2, 3, 4, 5],
+        "exact_columns": [0],
+        "round_decimals": 4
+      }
+    }
+  ]
+}

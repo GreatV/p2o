@@ -1,0 +1,626 @@
+{
+  "operator_targets": {
+    "p": {
+      "kind": "internal",
+      "impl": "parameter loader",
+      "note": "Persistable tensor registration."
+    },
+    "0.combine": {
+      "kind": "internal",
+      "impl": "custom list aggregator",
+      "note": "Feeds concat/stack/index ops."
+    },
+    "0.split": {
+      "kind": "internal",
+      "impl": "custom list splitter",
+      "note": "Materializes vector outputs back into tensors."
+    },
+    "1.abs": {
+      "kind": "generic",
+      "impl": "Abs",
+      "note": ""
+    },
+    "1.add": {
+      "kind": "generic",
+      "impl": "Add",
+      "note": ""
+    },
+    "1.arange": {
+      "kind": "custom",
+      "impl": "Range + optional Cast/Squeeze",
+      "note": "Scalarizes start/end/step and honors Paddle dtype."
+    },
+    "1.argmax": {
+      "kind": "custom",
+      "impl": "ArgMax",
+      "note": "Reads axis from tensor input."
+    },
+    "1.any": {
+      "kind": "custom",
+      "impl": "Cast + ReduceMax + Cast",
+      "note": "Reduces boolean tensors with Paddle axis/keepdim semantics."
+    },
+    "1.all": {
+      "kind": "custom",
+      "impl": "Cast + ReduceMin + Cast",
+      "note": "Reduces boolean tensors with Paddle axis/keepdim semantics."
+    },
+  "1.argsort": {
+    "kind": "custom",
+    "impl": "TopK full-axis sort + deterministic integer tie-break",
+    "note": "Expands axis length into K and injects a converter-defined tie-break for integer argsort when stable=false so CPU/GPU/ORT agree."
+  },
+    "1.assign": {
+      "kind": "generic",
+      "impl": "Identity",
+      "note": ""
+    },
+    "1.assign_value_": {
+      "kind": "custom",
+      "impl": "Constant initializer",
+      "note": "Supports scalar/vector/tensor literals."
+    },
+    "1.batch_norm": {
+      "kind": "generic",
+      "impl": "BatchNormalization",
+      "note": ""
+    },
+    "1.batch_norm_": {
+      "kind": "custom",
+      "impl": "BatchNormalization",
+      "note": "Drops extra Paddle outputs."
+    },
+    "1.bitwise_and": {
+      "kind": "generic",
+      "impl": "And",
+      "note": ""
+    },
+    "1.bitwise_not": {
+      "kind": "custom",
+      "impl": "Not or Neg + Add",
+      "note": "Uses logical not for bool tensors and a two's-complement rewrite for integer tensors."
+    },
+    "1.bmm": {
+      "kind": "generic",
+      "impl": "MatMul",
+      "note": "Batch matmul maps directly to ONNX MatMul."
+    },
+    "1.cast": {
+      "kind": "custom",
+      "impl": "Cast",
+      "note": "Maps Paddle dtype strings to ONNX element types."
+    },
+    "1.clip": {
+      "kind": "custom",
+      "impl": "Clip",
+      "note": "Auto-casts min/max to input dtype."
+    },
+    "1.concat": {
+      "kind": "custom",
+      "impl": "Concat",
+      "note": "Reads tensor list from 0.combine."
+    },
+    "1.conv2d": {
+      "kind": "generic",
+      "impl": "Conv",
+      "note": ""
+    },
+    "1.conv2d_transpose": {
+      "kind": "generic",
+      "impl": "ConvTranspose",
+      "note": ""
+    },
+    "1.cos": {
+      "kind": "generic",
+      "impl": "Cos",
+      "note": ""
+    },
+    "1.cumsum": {
+      "kind": "custom",
+      "impl": "CumSum",
+      "note": "Uses tensor axis input."
+    },
+    "1.data": {
+      "kind": "custom",
+      "impl": "graph input",
+      "note": "Builds ONNX graph inputs from Paddle data ops."
+    },
+    "1.depthwise_conv2d": {
+      "kind": "generic",
+      "impl": "Conv",
+      "note": ""
+    },
+    "1.divide": {
+      "kind": "generic",
+      "impl": "Div",
+      "note": ""
+    },
+    "1.dropout": {
+      "kind": "custom",
+      "impl": "Identity",
+      "note": "Inference-only pass-through."
+    },
+    "1.equal": {
+      "kind": "generic",
+      "impl": "Equal",
+      "note": ""
+    },
+    "1.einsum": {
+      "kind": "custom",
+      "impl": "Einsum",
+      "note": "Supports combined tensor lists."
+    },
+    "1.elementwise_pow": {
+      "kind": "generic",
+      "impl": "Pow",
+      "note": ""
+    },
+    "1.embedding": {
+      "kind": "custom",
+      "impl": "Gather",
+      "note": "Swaps weight/index input order."
+    },
+    "1.expand": {
+      "kind": "custom",
+      "impl": "Expand + shape rewrite",
+      "note": "Rewrites Paddle -1 shape entries to runtime input dims."
+    },
+    "1.fetch": {
+      "kind": "custom",
+      "impl": "graph output + Identity",
+      "note": "Preserves fetch names as ONNX outputs."
+    },
+    "1.flatten": {
+      "kind": "custom",
+      "impl": "Reshape",
+      "note": "Uses Paddle output shape metadata for explicit stop_axis."
+    },
+    "1.flip": {
+      "kind": "custom",
+      "impl": "Gather reverse indices",
+      "note": "Requires static axis length from metadata."
+    },
+    "1.floor": {
+      "kind": "generic",
+      "impl": "Floor",
+      "note": ""
+    },
+    "1.floor_divide": {
+      "kind": "custom",
+      "impl": "Cast + Div + Floor + Cast",
+      "note": "Keeps integer result dtype."
+    },
+    "1.full": {
+      "kind": "custom",
+      "impl": "Constant initializer",
+      "note": "Supports scalar fill broadcast to full tensor shape."
+    },
+    "1.full_int_array": {
+      "kind": "custom",
+      "impl": "Constant initializer",
+      "note": "Used as shape/axis helper tensors."
+    },
+    "1.full_like": {
+      "kind": "custom",
+      "impl": "Shape + Expand",
+      "note": "Broadcasts template value to input shape."
+    },
+    "1.full_with_tensor": {
+      "kind": "custom",
+      "impl": "Expand",
+      "note": "Broadcasts runtime scalar to runtime shape."
+    },
+    "1.gather": {
+      "kind": "custom",
+      "impl": "Gather",
+      "note": "Axis comes from a tensor input."
+    },
+    "1.gather_nd": {
+      "kind": "generic",
+      "impl": "GatherND",
+      "note": ""
+    },
+    "1.gelu": {
+      "kind": "custom",
+      "impl": "Div + Erf + Add + Mul",
+      "note": "Avoids depending on newer Gelu schema."
+    },
+    "1.greater_equal": {
+      "kind": "generic",
+      "impl": "GreaterOrEqual",
+      "note": ""
+    },
+    "1.grid_sample": {
+      "kind": "custom",
+      "impl": "GridSample",
+      "note": "Requires opset 17 for these models."
+    },
+    "1.hardsigmoid": {
+      "kind": "generic",
+      "impl": "HardSigmoid",
+      "note": ""
+    },
+    "1.hardswish": {
+      "kind": "generic",
+      "impl": "HardSwish",
+      "note": ""
+    },
+    "1.if": {
+      "kind": "custom",
+      "impl": "If",
+      "note": "Converts Paddle control-flow regions into ONNX subgraphs."
+    },
+    "1.index_put": {
+      "kind": "custom",
+      "impl": "Where/ScatterElements/ScatterND",
+      "note": "Dispatches by observed index pattern."
+    },
+    "1.index_select": {
+      "kind": "custom",
+      "impl": "Gather",
+      "note": "Axis comes from op attribute."
+    },
+    "1.layer_norm": {
+      "kind": "generic",
+      "impl": "LayerNormalization",
+      "note": ""
+    },
+    "1.multinomial": {
+      "kind": "custom",
+      "impl": "ArgMax",
+      "note": "Inference-only deterministic lowering for sample_size=1 categorical decode. Avoids backend-specific RNG divergence."
+    },
+    "1.less_equal": {
+      "kind": "generic",
+      "impl": "LessOrEqual",
+      "note": ""
+    },
+    "1.less_than": {
+      "kind": "generic",
+      "impl": "Less",
+      "note": ""
+    },
+    "1.log": {
+      "kind": "generic",
+      "impl": "Log",
+      "note": ""
+    },
+    "1.logical_and": {
+      "kind": "generic",
+      "impl": "And",
+      "note": ""
+    },
+    "1.logical_not": {
+      "kind": "generic",
+      "impl": "Not",
+      "note": ""
+    },
+    "1.matmul": {
+      "kind": "custom",
+      "impl": "Transpose + MatMul",
+      "note": "Honors transpose_x/transpose_y."
+    },
+    "1.matmul_v2": {
+      "kind": "custom",
+      "impl": "Transpose + MatMul",
+      "note": "Honors transpose_x/transpose_y."
+    },
+    "1.mean": {
+      "kind": "custom",
+      "impl": "ReduceMean",
+      "note": "Uses tensor or attribute axes and preserves scalar passthrough behavior."
+    },
+    "1.max": {
+      "kind": "custom",
+      "impl": "ReduceMax",
+      "note": "Axes come from helper tensor."
+    },
+    "1.multiclass_nms3": {
+      "kind": "custom",
+      "impl": "NonMaxSuppression + Gather/GatherND + TopK + stable class reorder",
+      "note": "Applies global keep_top_k on score, then emits Paddle-style final rows grouped by class with class-local score order preserved."
+    },
+    "1.multiply": {
+      "kind": "generic",
+      "impl": "Mul",
+      "note": ""
+    },
+    "1.pad": {
+      "kind": "custom",
+      "impl": "Pad",
+      "note": "Reorders Paddle flat paddings into ONNX begin/end order."
+    },
+    "1.nearest_interp": {
+      "kind": "custom",
+      "impl": "Resize",
+      "note": "Uses fixed NCHW scales tensor."
+    },
+    "1.not_equal": {
+      "kind": "custom",
+      "impl": "Equal + Not",
+      "note": ""
+    },
+    "1.one_hot": {
+      "kind": "custom",
+      "impl": "OneHot",
+      "note": "Casts depth to int64 and materializes output values tensor from output dtype."
+    },
+    "1.pad3d": {
+      "kind": "custom",
+      "impl": "Slice + Concat + Pad",
+      "note": "Reorders Paddle 3D spatial paddings tensor into ONNX NCDHW pad order."
+    },
+    "1.pool2d": {
+      "kind": "custom",
+      "impl": "MaxPool/AveragePool",
+      "note": "Maps kernel input and pool type."
+    },
+    "1.pow": {
+      "kind": "custom",
+      "impl": "Pow",
+      "note": "Supports exponent from tensor input or scalar attribute."
+    },
+    "1.prelu": {
+      "kind": "custom",
+      "impl": "PRelu",
+      "note": "Drops Paddle-only attrs and reshapes NHWC/NDHWC channel slopes when needed."
+    },
+    "1.relu": {
+      "kind": "generic",
+      "impl": "Relu",
+      "note": ""
+    },
+    "1.roll": {
+      "kind": "custom",
+      "impl": "Slice + Concat",
+      "note": "Currently lowers constant-shift rolls into per-axis slice/concat blocks for opset 17 compatibility."
+    },
+    "1.remainder": {
+      "kind": "generic",
+      "impl": "Mod",
+      "note": ""
+    },
+    "1.reshape": {
+      "kind": "generic",
+      "impl": "Reshape",
+      "note": ""
+    },
+    "1.repeat_interleave": {
+      "kind": "custom",
+      "impl": "Unsqueeze + Tile + Reshape",
+      "note": "Supports scalar repeats from attribute or tensor input."
+    },
+    "1.scale": {
+      "kind": "custom",
+      "impl": "Mul/Add",
+      "note": "Preserves scalar-vs-vector shape and integer dtypes."
+    },
+    "1.set_value_": {
+      "kind": "custom",
+      "impl": "ScatterElements / ScatterND",
+      "note": "Handles observed axes=[1] slice form and UniMERNet's axes=[1,2] constant block writes."
+    },
+    "1.set_value_with_tensor_": {
+      "kind": "custom",
+      "impl": "Identity / Range + ScatterElements overwrite",
+      "note": "Handles full-tensor replacement, axes=[1] slice overwrites, and decrease_axes=[1] single-index token writes."
+    },
+    "1.shape": {
+      "kind": "generic",
+      "impl": "Shape",
+      "note": ""
+    },
+    "1.shape64": {
+      "kind": "generic",
+      "impl": "Shape",
+      "note": ""
+    },
+    "1.sigmoid": {
+      "kind": "generic",
+      "impl": "Sigmoid",
+      "note": ""
+    },
+    "1.silu": {
+      "kind": "custom",
+      "impl": "Sigmoid + Mul",
+      "note": "Alias of swish."
+    },
+    "1.sin": {
+      "kind": "generic",
+      "impl": "Sin",
+      "note": ""
+    },
+    "1.slice": {
+      "kind": "custom",
+      "impl": "Slice + optional Squeeze",
+      "note": "Axes injected as helper initializer."
+    },
+    "1.softmax": {
+      "kind": "generic",
+      "impl": "Softmax",
+      "note": ""
+    },
+    "1.sqrt": {
+      "kind": "generic",
+      "impl": "Sqrt",
+      "note": ""
+    },
+    "1.split": {
+      "kind": "custom",
+      "impl": "Split",
+      "note": "Uses 0.split metadata to name outputs."
+    },
+    "1.split_with_num": {
+      "kind": "custom",
+      "impl": "Split",
+      "note": "Uses 0.split metadata to name outputs."
+    },
+    "1.squeeze": {
+      "kind": "custom",
+      "impl": "Squeeze / Identity",
+      "note": "Filters non-singleton constant axes into a legal ONNX squeeze."
+    },
+    "1.squeeze_": {
+      "kind": "custom",
+      "impl": "Squeeze / Identity",
+      "note": "Filters non-singleton constant axes into a legal ONNX squeeze."
+    },
+    "1.stack": {
+      "kind": "custom",
+      "impl": "Unsqueeze + Concat",
+      "note": "Reads tensor list from 0.combine."
+    },
+    "1.strided_slice": {
+      "kind": "custom",
+      "impl": "Slice + optional Squeeze",
+      "note": "Reads starts/ends/steps from tensor inputs and preserves decrease_axis squeeze semantics."
+    },
+    "1.subtract": {
+      "kind": "generic",
+      "impl": "Sub",
+      "note": ""
+    },
+    "1.sum": {
+      "kind": "custom",
+      "impl": "ReduceSum",
+      "note": "Uses tensor axes input for opset 17 semantics."
+    },
+    "1.swish": {
+      "kind": "custom",
+      "impl": "Sigmoid + Mul",
+      "note": ""
+    },
+    "1.take_along_axis": {
+      "kind": "custom",
+      "impl": "GatherElements",
+      "note": ""
+    },
+    "1.tanh": {
+      "kind": "generic",
+      "impl": "Tanh",
+      "note": ""
+    },
+    "1.tile": {
+      "kind": "custom",
+      "impl": "Tile + optional Unsqueeze",
+      "note": "Unsqueezes scalar inputs before tiling."
+    },
+    "1.topk": {
+      "kind": "custom",
+      "impl": "TopK",
+      "note": "Consumes K as tensor input."
+    },
+    "1.transpose": {
+      "kind": "generic",
+      "impl": "Transpose",
+      "note": ""
+    },
+    "1.unbind": {
+      "kind": "custom",
+      "impl": "Split + Squeeze",
+      "note": "Expands Paddle vector outputs using recorded 0.split metadata."
+    },
+    "1.tril": {
+      "kind": "custom",
+      "impl": "Trilu",
+      "note": ""
+    },
+    "1.triu": {
+      "kind": "custom",
+      "impl": "Trilu",
+      "note": ""
+    },
+    "1.unsqueeze": {
+      "kind": "generic",
+      "impl": "Unsqueeze",
+      "note": ""
+    },
+    "1.unsqueeze_": {
+      "kind": "generic",
+      "impl": "Unsqueeze",
+      "note": ""
+    },
+    "1.while": {
+      "kind": "custom",
+      "impl": "Loop",
+      "note": "Converts Paddle while loop regions into ONNX Loop body subgraphs."
+    },
+    "1.where": {
+      "kind": "generic",
+      "impl": "Where",
+      "note": ""
+    },
+    "2.yield": {
+      "kind": "internal",
+      "impl": "subgraph terminator",
+      "note": "Terminator for Paddle control-flow regions; materialized as ONNX subgraph outputs."
+    }
+  },
+  "subgraph_targets": [
+    {
+      "id": "ppocr_backbone",
+      "label": "PPHGNetV2 Backbone",
+      "match": "PPHGNetV2"
+    },
+    {
+      "id": "ppocr_det_neck",
+      "label": "LKPAN Neck",
+      "match": "LKPAN"
+    },
+    {
+      "id": "ppocr_det_head",
+      "label": "PFHeadLocal Head",
+      "match": "PFHeadLocal"
+    },
+    {
+      "id": "ppocr_rec_head",
+      "label": "Recognition MultiHead",
+      "match": "MultiHead"
+    },
+    {
+      "id": "table_sla_head",
+      "label": "SLAHead",
+      "match": "SLAHead"
+    },
+    {
+      "id": "layout_hybrid_encoder",
+      "label": "HybridEncoder",
+      "match": "HybridEncoder"
+    },
+    {
+      "id": "layout_rtdetr",
+      "label": "RTDETRTransformer",
+      "match": "RTDETRTransformer"
+    },
+    {
+      "id": "layout_ms_deform_attn",
+      "label": "PPMSDeformableAttention",
+      "match": "PPMSDeformableAttention"
+    },
+    {
+      "id": "layout_dino_head",
+      "label": "DINOHead",
+      "match": "DINOHead"
+    },
+    {
+      "id": "layout_reading_order",
+      "label": "ReadingOrderPredictor",
+      "match": "ReadingOrderPredictor"
+    },
+    {
+      "id": "layout_text_embeddings",
+      "label": "LayoutLMv3TextEmbeddings",
+      "match": "LayoutLMv3TextEmbeddings"
+    },
+    {
+      "id": "layout_position_relation",
+      "label": "PositionRelationEmbeddingPD",
+      "match": "PositionRelationEmbeddingPD"
+    },
+    {
+      "id": "layout_global_pointer",
+      "label": "GlobalPointerPD",
+      "match": "GlobalPointerPD"
+    }
+  ]
+}

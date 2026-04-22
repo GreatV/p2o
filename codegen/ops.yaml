@@ -1,0 +1,361 @@
+pass2_dispatch:
+  # Operators listed here use dedicated pass2 handlers. Other "1.*" operators
+  # fall back to generic ONNX op mapping through op_type_map below.
+  - op: "p"
+    kind: noop
+    method: pass2_noop
+  - op: "0.combine"
+    kind: noop
+    method: pass2_noop
+  - op: "0.split"
+    kind: noop
+    method: pass2_noop
+  - op: "1.full"
+    kind: typed
+    method: op_full
+  - op: "1.full_int_array"
+    kind: typed
+    method: op_full
+  - op: "1.assign_value_"
+    kind: simple
+    method: op_assign_value
+  - op: "1.data"
+    kind: simple
+    method: op_data
+  - op: "1.fetch"
+    kind: simple
+    method: op_fetch
+  - op: "1.cast"
+    kind: simple
+    method: op_cast
+  - op: "1.matmul"
+    kind: simple
+    method: op_matmul
+  - op: "1.matmul_v2"
+    kind: simple
+    method: op_matmul
+  - op: "1.clip"
+    kind: simple
+    method: op_clip
+  - op: "1.slice"
+    kind: simple
+    method: op_slice
+  - op: "1.squeeze"
+    kind: simple
+    method: op_squeeze
+  - op: "1.squeeze_"
+    kind: simple
+    method: op_squeeze
+  - op: "1.unsqueeze"
+    kind: simple
+    method: op_unsqueeze
+  - op: "1.unsqueeze_"
+    kind: simple
+    method: op_unsqueeze
+  - op: "1.flatten"
+    kind: simple
+    method: op_flatten
+  - op: "1.scale"
+    kind: simple
+    method: op_scale
+  - op: "1.swish"
+    kind: simple
+    method: op_swish
+  - op: "1.silu"
+    kind: simple
+    method: op_silu
+  - op: "1.hardswish"
+    kind: simple
+    method: op_hardswish
+  - op: "1.gelu"
+    kind: simple
+    method: op_gelu
+  - op: "1.stack"
+    kind: simple
+    method: op_stack
+  - op: "1.concat"
+    kind: simple
+    method: op_concat
+  - op: "1.split"
+    kind: typed
+    method: op_split_family
+  - op: "1.split_with_num"
+    kind: typed
+    method: op_split_family
+  - op: "1.nearest_interp"
+    kind: simple
+    method: op_nearest_interp
+  - op: "1.bilinear_interp"
+    kind: simple
+    method: op_bilinear_interp
+  - op: "1.arange"
+    kind: simple
+    method: op_arange
+  - op: "1.pool2d"
+    kind: simple
+    method: op_pool2d
+  - op: "1.batch_norm_"
+    kind: simple
+    method: op_batch_norm
+  - op: "1.batch_norm"
+    kind: simple
+    method: op_batch_norm
+  - op: "1.conv2d_transpose"
+    kind: simple
+    method: op_conv2d_transpose
+  - op: "1.conv2d_transpose_"
+    kind: simple
+    method: op_conv2d_transpose
+  - op: "1.expand"
+    kind: simple
+    method: op_expand
+  - op: "1.full_like"
+    kind: simple
+    method: op_full_like
+  - op: "1.full_with_tensor"
+    kind: simple
+    method: op_full_with_tensor
+  - op: "1.eye"
+    kind: simple
+    method: op_eye
+  - op: "1.max"
+    kind: simple
+    method: op_reduce_max
+  - op: "1.mean"
+    kind: simple
+    method: op_reduce_mean
+  - op: "1.min"
+    kind: simple
+    method: op_reduce_min
+  - op: "1.sum"
+    kind: simple
+    method: op_reduce_sum
+  - op: "1.topk"
+    kind: simple
+    method: op_topk
+  - op: "1.argmax"
+    kind: simple
+    method: op_argmax
+  - op: "1.any"
+    kind: arg
+    method: op_any_all
+    args: ["true"]
+  - op: "1.all"
+    kind: arg
+    method: op_any_all
+    args: ["false"]
+  - op: "1.argsort"
+    kind: simple
+    method: op_argsort
+  - op: "1.gather"
+    kind: simple
+    method: op_gather
+  - op: "1.index_select"
+    kind: simple
+    method: op_index_select
+  - op: "1.embedding"
+    kind: simple
+    method: op_embedding
+  - op: "1.take_along_axis"
+    kind: simple
+    method: op_take_along_axis
+  - op: "1.one_hot"
+    kind: simple
+    method: op_one_hot
+  - op: "1.not_equal"
+    kind: simple
+    method: op_not_equal
+  - op: "1.multiclass_nms3"
+    kind: simple
+    method: op_multiclass_nms3
+  - op: "1.floor_divide"
+    kind: simple
+    method: op_floor_divide
+  - op: "1.grid_sample"
+    kind: simple
+    method: op_grid_sample
+  - op: "1.flip"
+    kind: simple
+    method: op_flip
+  - op: "1.cumsum"
+    kind: simple
+    method: op_cumsum
+  - op: "1.einsum"
+    kind: simple
+    method: op_einsum
+  - op: "1.meshgrid"
+    kind: simple
+    method: op_meshgrid
+  - op: "1.group_norm"
+    kind: simple
+    method: op_group_norm
+  - op: "1.if"
+    kind: simple
+    method: op_if
+  - op: "1.index_put"
+    kind: simple
+    method: op_index_put
+  - op: "1.set_value_"
+    kind: simple
+    method: op_set_value
+  - op: "1.set_value_with_tensor_"
+    kind: simple
+    method: op_set_value_with_tensor
+  - op: "1.pad"
+    kind: simple
+    method: op_pad
+  - op: "1.pad3d"
+    kind: simple
+    method: op_pad3d
+  - op: "1.pow"
+    kind: simple
+    method: op_pow
+  - op: "1.prelu"
+    kind: simple
+    method: op_prelu
+  - op: "1.put_along_axis"
+    kind: simple
+    method: op_put_along_axis
+  - op: "1.repeat_interleave"
+    kind: simple
+    method: op_repeat_interleave
+  - op: "1.repeat_interleave_with_tensor_index"
+    kind: simple
+    method: op_repeat_interleave
+  - op: "1.roll"
+    kind: simple
+    method: op_roll
+  - op: "1.strided_slice"
+    kind: simple
+    method: op_strided_slice
+  - op: "1.tril"
+    kind: arg
+    method: op_trilu
+    args: ["false"]
+  - op: "1.triu"
+    kind: arg
+    method: op_trilu
+    args: ["true"]
+  - op: "1.dropout"
+    kind: simple
+    method: op_dropout
+  - op: "1.tile"
+    kind: simple
+    method: op_tile
+  - op: "1.bitwise_and"
+    kind: simple
+    method: op_bitwise_and
+  - op: "1.multiply"
+    kind: simple
+    method: op_multiply
+  - op: "1.multinomial"
+    kind: simple
+    method: op_multinomial
+  - op: "1.unbind"
+    kind: simple
+    method: op_unbind
+  - op: "1.bitwise_not"
+    kind: simple
+    method: op_bitwise_not
+  - op: "1.while"
+    kind: simple
+    method: op_while
+  - op: "2.yield"
+    kind: noop
+    method: pass2_noop
+
+op_type_map:
+  - paddle: ["conv2d", "depthwise_conv2d"]
+    onnx: "Conv"
+  - paddle: ["add"]
+    onnx: "Add"
+  - paddle: ["relu"]
+    onnx: "Relu"
+  - paddle: ["pool2d"]
+    onnx: "MaxPool"
+  - paddle: ["batch_norm", "batch_norm_"]
+    onnx: "BatchNormalization"
+  - paddle: ["matmul", "matmul_v2", "bmm"]
+    onnx: "MatMul"
+  - paddle: ["reshape"]
+    onnx: "Reshape"
+  - paddle: ["transpose"]
+    onnx: "Transpose"
+  - paddle: ["softmax"]
+    onnx: "Softmax"
+  - paddle: ["conv2d_transpose"]
+    onnx: "ConvTranspose"
+  - paddle: ["nearest_interp"]
+    onnx: "Resize"
+  - paddle: ["sigmoid"]
+    onnx: "Sigmoid"
+  - paddle: ["assign", "share_data"]
+    onnx: "Identity"
+  - paddle: ["equal"]
+    onnx: "Equal"
+  - paddle: ["shape64", "shape"]
+    onnx: "Shape"
+  - paddle: ["flatten"]
+    onnx: "Flatten"
+  - paddle: ["hardsigmoid"]
+    onnx: "HardSigmoid"
+  - paddle: ["hardswish"]
+    onnx: "HardSwish"
+  - paddle: ["layer_norm"]
+    onnx: "LayerNormalization"
+  - paddle: ["logical_and", "bitwise_and"]
+    onnx: "And"
+  - paddle: ["logical_not"]
+    onnx: "Not"
+  - paddle: ["logical_or"]
+    onnx: "Or"
+  - paddle: ["squeeze", "squeeze_"]
+    onnx: "Squeeze"
+  - paddle: ["unsqueeze", "unsqueeze_"]
+    onnx: "Unsqueeze"
+  - paddle: ["clip"]
+    onnx: "Clip"
+  - paddle: ["ceil"]
+    onnx: "Ceil"
+  - paddle: ["divide"]
+    onnx: "Div"
+  - paddle: ["floor"]
+    onnx: "Floor"
+  - paddle: ["gather_nd"]
+    onnx: "GatherND"
+  - paddle: ["log"]
+    onnx: "Log"
+  - paddle: ["multiply"]
+    onnx: "Mul"
+  - paddle: ["range", "arange"]
+    onnx: "Range"
+  - paddle: ["remainder"]
+    onnx: "Mod"
+  - paddle: ["subtract"]
+    onnx: "Sub"
+  - paddle: ["tanh"]
+    onnx: "Tanh"
+  - paddle: ["tile"]
+    onnx: "Tile"
+  - paddle: ["where"]
+    onnx: "Where"
+  - paddle: ["abs"]
+    onnx: "Abs"
+  - paddle: ["cos"]
+    onnx: "Cos"
+  - paddle: ["elementwise_pow"]
+    onnx: "Pow"
+  - paddle: ["expand"]
+    onnx: "Expand"
+  - paddle: ["greater_equal"]
+    onnx: "GreaterOrEqual"
+  - paddle: ["greater_than"]
+    onnx: "Greater"
+  - paddle: ["sin"]
+    onnx: "Sin"
+  - paddle: ["less_equal"]
+    onnx: "LessOrEqual"
+  - paddle: ["less_than"]
+    onnx: "Less"
+  - paddle: ["sqrt"]
+    onnx: "Sqrt"
