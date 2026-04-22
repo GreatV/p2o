@@ -1,0 +1,77 @@
+name: Validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  rust-checks:
+    name: Rust Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run tests
+        run: cargo test --all-targets
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  full-regression:
+    name: Full Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Download regression models
+        run: |
+          python scripts/download_regression_models.py \
+            --manifest scripts/regression_models.json
+
+      - name: Install regression dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 onnxruntime==1.23.2 paddlepaddle==3.2.2
+
+      - name: Run full regression
+        run: |
+          python scripts/regression_suite.py diff \
+            --manifest scripts/regression_models.json \
+            --json-out /tmp/p2o_full_regression_ci.json
+
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-regression-report
+          path: /tmp/p2o_full_regression_ci.json

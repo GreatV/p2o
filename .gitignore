@@ -1,7 +1,5 @@
 /target
-*.onnx
-*.pdiparams
-PP-OCRv5_*_infer/
-scripts/data/
+inference_models/
 *.bak
-/refactor*.py
+__pycache__
+.tmp_regression/
