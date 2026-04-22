@@ -68,12 +68,38 @@ def download_archive(url: str, archive_path: Path) -> None:
 
 
 def safe_extract_all(archive_path: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
     with tarfile.open(archive_path) as archive:
         for member in archive.getmembers():
+            if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+                raise ValueError(
+                    f"Refusing to extract unsupported tar member type: {member.name}"
+                )
+            if not (member.isdir() or member.isfile()):
+                raise ValueError(
+                    f"Refusing to extract unsupported tar member type: {member.name}"
+                )
+
             member_path = (destination / member.name).resolve()
-            if destination.resolve() not in member_path.parents and member_path != destination.resolve():
-                raise ValueError(f"Refusing to extract path outside destination: {member.name}")
-        archive.extractall(destination)
+            if member_path != destination and destination not in member_path.parents:
+                raise ValueError(
+                    f"Refusing to extract path outside destination: {member.name}"
+                )
+
+            if member.isdir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                raise ValueError(f"Could not read file from archive: {member.name}")
+            with extracted, member_path.open("wb") as handle:
+                shutil.copyfileobj(extracted, handle)
+            if member.mode:
+                member_path.chmod(member.mode & 0o777)
 
 
 def find_extracted_root(extract_dir: Path, expected_name: str) -> Path:

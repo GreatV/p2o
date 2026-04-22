@@ -125,6 +125,16 @@ impl super::super::Converter {
 
     fn op_resize_interp(&mut self, op: &Value, mode: &str) -> anyhow::Result<()> {
         self.require_opset(11, mode)?;
+        let data_format = helper::attr(op, "data_format")
+            .and_then(|d| d.as_str())
+            .unwrap_or("NCHW");
+        if data_format != "NCHW" {
+            anyhow::bail!(
+                "{} currently only supports data_format=NCHW (got {})",
+                mode,
+                data_format
+            );
+        }
         let align_corners = helper::attr(op, "align_corners")
             .and_then(|d| d.as_bool())
             .unwrap_or(false);

@@ -33,10 +33,15 @@ def convert_model(binary: Path, model_spec: ModelSpec, output_path: Path, opset:
     )
 
 
-def run_paddle(model_spec: ModelSpec, inputs: dict[str, Any], device: str) -> list[Any]:
+def run_paddle(
+    model_spec: ModelSpec,
+    inputs: dict[str, Any],
+    device: str,
+    seed: int = 20260412,
+) -> list[Any]:
     import paddle
 
-    paddle.seed(20260412)
+    paddle.seed(seed)
 
     config = paddle.inference.Config(
         str(model_spec.model_dir / "inference.json"),
@@ -143,7 +148,7 @@ def run_diff_suite(
                     report_item["reference_kind"] = "semantic_baseline"
                     report_item["reference_path"] = str(model_spec.semantic_baseline)
                 else:
-                    reference_outputs = run_paddle(model_spec, inputs, paddle_device)
+                    reference_outputs = run_paddle(model_spec, inputs, paddle_device, seed)
                     report_item["reference_kind"] = "paddle"
                 report_item["diff"] = compare_outputs(
                     reference_outputs,

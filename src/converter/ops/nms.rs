@@ -12,6 +12,19 @@ impl Converter {
         if inputs.len() < 2 {
             bail!("multiclass_nms3 missing inputs");
         }
+
+        // The current lowering emits a scalar rois_num, which is only correct
+        // for batch_size == 1. Reject larger batches explicitly so we don't
+        // silently produce an invalid [1]-shaped output.
+        if let Some(scores_shape) = self.state.tensor_shapes.get(&inputs[1]) {
+            let batch = scores_shape.first().copied().unwrap_or(0);
+            if batch > 1 {
+                bail!(
+                    "multiclass_nms3 currently only supports batch_size=1 (got {})",
+                    batch
+                );
+            }
+        }
         let outputs = op
             .get("O")
             .and_then(|o| o.as_array())

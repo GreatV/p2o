@@ -213,7 +213,25 @@ impl Converter {
             if step == 0 {
                 bail!("set_value_ step cannot be zero");
             }
-            let axis_len = ((end - start) / step).max(1);
+            if step < 0 {
+                bail!("set_value_ axes=[1] currently only supports positive step");
+            }
+            if start < 0 || end < 0 {
+                bail!(
+                    "set_value_ axes=[1] currently requires non-negative start/end (negative indices not yet supported)"
+                );
+            }
+            let indices: Vec<i64> = (start..end).step_by(step as usize).collect();
+            if indices.is_empty() {
+                self.onnx_graph.node.push(onnx::NodeProto {
+                    op_type: "Identity".to_string(),
+                    input: vec![self.get_tensor_name(inputs[0])?],
+                    output: vec![self.get_tensor_name(out_id)?],
+                    ..Default::default()
+                });
+                return Ok(());
+            }
+            let axis_len = indices.len() as i64;
 
             let shape_name = format!("set_value_shape_{}", out_id);
             self.onnx_graph.node.push(onnx::NodeProto {
@@ -254,7 +272,7 @@ impl Converter {
                 data_type: dt::INT64,
                 ..Default::default()
             };
-            for idx in (start..end).step_by(step as usize) {
+            for &idx in &indices {
                 indices_tensor
                     .raw_data
                     .extend_from_slice(&idx.to_le_bytes());
@@ -270,7 +288,10 @@ impl Converter {
             });
 
             let updates_name = format!("set_value_updates_{}", out_id);
-            self.push_i64_initializer(updates_name.clone(), vec![1], &[values as i64]);
+            let updates_dtype = self
+                .maybe_onnx_dtype_for_tensor_id(inputs[0])?
+                .unwrap_or(dt::FLOAT);
+            self.push_numeric_initializer(updates_name.clone(), vec![1], updates_dtype, &[values])?;
 
             let expanded_updates_name = format!("set_value_updates_expanded_{}", out_id);
             self.onnx_graph.node.push(onnx::NodeProto {
@@ -566,7 +587,17 @@ impl Converter {
                 if step == 0 {
                     bail!("set_value_with_tensor_ step cannot be zero");
                 }
-                let len = ((end - start) / step).abs().max(1);
+                let len = if step > 0 {
+                    if end <= start {
+                        0
+                    } else {
+                        (end - start + step - 1) / step
+                    }
+                } else if start <= end {
+                    0
+                } else {
+                    (start - end + (-step) - 1) / (-step)
+                };
                 if len != 1 {
                     bail!(
                         "set_value_with_tensor_ decrease_axes=[1] requires a single indexed position"
