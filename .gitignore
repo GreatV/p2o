@@ -3,3 +3,10 @@ inference_models/
 *.bak
 __pycache__
 .tmp_regression/
+
+# Python / uv
+.venv/
+dist/
+*.egg-info/
+*.so
+*.pyd

@@ -2,15 +2,16 @@ name: Validation
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   rust-checks:
     name: Rust Checks
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,9 +38,9 @@ jobs:
 
   full-regression:
     name: Full Regression
+    needs: rust-checks
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
