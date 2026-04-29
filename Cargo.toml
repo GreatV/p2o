@@ -2,6 +2,15 @@
 name = "p2o"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Wang Xin <xinwang614@gmail.com>"]
+repository = "https://github.com/greatv/p2o"
+homepage = "https://github.com/greatv/p2o"
+description = "A PaddlePaddle New IR (PIR) to ONNX model converter."
+readme = "README.md"
+keywords = ["paddlepaddle", "onnx", "converter", "deep-learning", "model"]
+categories = ["command-line-utilities", "science"]
 
 [lib]
 path = "src/lib.rs"

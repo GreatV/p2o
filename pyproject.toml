@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "p2o"
+description = "A PaddlePaddle New IR (PIR) to ONNX model converter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+keywords = ["paddlepaddle", "onnx", "converter", "deep-learning"]
+authors = [{ name = "Wang Xin", email = "xinwang614@gmail.com" }]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Environment :: Console",
+]
+
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "bin"
+
+[project.urls]
+Documentation = "https://github.com/greatv/p2o#readme"
+Issues = "https://github.com/greatv/p2o/issues"
+Source = "https://github.com/greatv/p2o"
