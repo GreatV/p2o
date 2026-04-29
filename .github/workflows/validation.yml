@@ -3,10 +3,23 @@ name: Validation
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+      - 'LICENSE*'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+      - 'LICENSE*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust-checks:
@@ -39,6 +52,15 @@ jobs:
   full-regression:
     name: Full Regression
     needs: rust-checks
+    # Heavy job (~2h, downloads models + paddlepaddle). Only run on:
+    #   - push to main
+    #   - manual dispatch
+    #   - PRs explicitly labeled `run-regression`
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'run-regression'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

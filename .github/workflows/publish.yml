@@ -11,6 +11,10 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Stage 1: Validate
   validate:
