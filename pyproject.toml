@@ -12,9 +12,14 @@ keywords = ["paddlepaddle", "onnx", "converter", "deep-learning"]
 authors = [{ name = "Wang Xin", email = "xinwang614@gmail.com" }]
 classifiers = [
   "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Environment :: Console",
 ]
 
 dynamic = ["version"]

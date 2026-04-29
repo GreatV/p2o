@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Stage 1: Validate
@@ -190,15 +190,18 @@ jobs:
     name: Publish to PyPI
     needs: [pypi-linux, pypi-musllinux, pypi-windows, pypi-macos, pypi-sdist]
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
-      - name: Publish
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
-          command: upload
-          args: --non-interactive --skip-existing wheels-*/*
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish to PyPI via Trusted Publisher (OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
   # Stage 4: Build & publish GitHub Release binaries
   build-binaries:
@@ -289,6 +292,8 @@ jobs:
     name: GitHub Release
     needs: build-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
