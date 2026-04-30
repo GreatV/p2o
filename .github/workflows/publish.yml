@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -83,12 +83,17 @@ jobs:
   pypi-linux:
     name: PyPI wheels (linux-${{ matrix.target }})
     needs: publish-crates
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -97,12 +102,25 @@ jobs:
           sccache: 'true'
           manylinux: auto
           before-script-linux: |
-            if command -v apt-get &> /dev/null; then
-              apt-get update && apt-get install -y protobuf-compiler
-            elif command -v yum &> /dev/null; then
-              yum install -y protobuf-compiler
+            set -eux
+            PROTOC_VERSION=28.3
+            case "$(uname -m)" in
+              x86_64) PROTOC_ARCH=x86_64 ;;
+              aarch64) PROTOC_ARCH=aarch_64 ;;
+              *) echo "Unsupported host arch: $(uname -m)"; exit 1 ;;
+            esac
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update && apt-get install -y curl unzip
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y curl unzip
+            elif command -v apk >/dev/null 2>&1; then
+              apk add --no-cache curl unzip
             fi
-      - uses: actions/upload-artifact@v4
+            curl -fL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip" -o /tmp/protoc.zip
+            unzip -o /tmp/protoc.zip -d /usr/local
+            rm /tmp/protoc.zip
+            protoc --version
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -110,12 +128,17 @@ jobs:
   pypi-musllinux:
     name: PyPI wheels (musllinux-${{ matrix.target }})
     needs: publish-crates
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -123,8 +146,26 @@ jobs:
           args: --release --out dist
           sccache: 'true'
           manylinux: musllinux_1_2
-          before-script-linux: apk add --no-cache protobuf-dev
-      - uses: actions/upload-artifact@v4
+          before-script-linux: |
+            set -eux
+            PROTOC_VERSION=28.3
+            case "$(uname -m)" in
+              x86_64) PROTOC_ARCH=x86_64 ;;
+              aarch64) PROTOC_ARCH=aarch_64 ;;
+              *) echo "Unsupported host arch: $(uname -m)"; exit 1 ;;
+            esac
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update && apt-get install -y curl unzip
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y curl unzip
+            elif command -v apk >/dev/null 2>&1; then
+              apk add --no-cache curl unzip
+            fi
+            curl -fL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip" -o /tmp/protoc.zip
+            unzip -o /tmp/protoc.zip -d /usr/local
+            rm /tmp/protoc.zip
+            protoc --version
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-musllinux-${{ matrix.target }}
           path: dist
@@ -134,16 +175,19 @@ jobs:
     needs: publish-crates
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install protoc
         run: choco install protoc
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: x64
           args: --release --out dist
           sccache: 'true'
-      - uses: actions/upload-artifact@v4
+          rust-toolchain: stable
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-x64
           path: dist
@@ -153,6 +197,7 @@ jobs:
     needs: publish-crates
     runs-on: ${{ matrix.platform.runner }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: macos-13
@@ -160,7 +205,7 @@ jobs:
           - runner: macos-latest
             target: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install protoc
         run: brew install protobuf
       - name: Build wheels
@@ -169,7 +214,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           sccache: 'true'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
@@ -179,13 +224,13 @@ jobs:
     needs: publish-crates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: dist
@@ -197,7 +242,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
@@ -219,10 +264,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: p2o-linux-x86_64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: p2o-linux-aarch64
-            cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: p2o-macos-aarch64
@@ -234,7 +278,7 @@ jobs:
             artifact: p2o-windows-x86_64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
@@ -253,22 +297,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build (native)
-        if: "!matrix.cross"
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -285,7 +320,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/p2o.exe" -Destination staging/
           Compress-Archive -Path staging/p2o.exe -DestinationPath ${{ matrix.artifact }}.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -300,9 +335,9 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
