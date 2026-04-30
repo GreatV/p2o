@@ -1,5 +1,10 @@
 # p2o
 
+[![Crates.io](https://img.shields.io/crates/v/p2o.svg)](https://crates.io/crates/p2o)
+[![PyPI](https://img.shields.io/pypi/v/p2o.svg)](https://pypi.org/project/p2o/)
+[![docs.rs](https://img.shields.io/docsrs/p2o)](https://docs.rs/p2o)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 A PaddlePaddle New IR (PIR) to ONNX model converter, written in Rust.
 
 Converts PaddlePaddle inference models (`inference.json` + `inference.pdiparams`) to the ONNX format.
