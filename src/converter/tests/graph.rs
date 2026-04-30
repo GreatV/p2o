@@ -10,6 +10,36 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 
+fn test_i64_tensor(name: &str, values: &[i64]) -> onnx::TensorProto {
+    let mut tensor = onnx::TensorProto {
+        name: name.to_string(),
+        dims: vec![values.len() as i64],
+        data_type: dt::INT64,
+        ..Default::default()
+    };
+    for value in values {
+        tensor.raw_data.extend_from_slice(&value.to_le_bytes());
+    }
+    tensor
+}
+
+fn test_cast_node(input: &str, output: &str, to: i32) -> onnx::NodeProto {
+    onnx::NodeProto {
+        op_type: "Cast".to_string(),
+        input: vec![input.to_string()],
+        output: vec![output.to_string()],
+        attribute: vec![crate::helper::attr_int("to", to as i64)],
+        ..Default::default()
+    }
+}
+
+fn test_value_info(name: &str) -> onnx::ValueInfoProto {
+    onnx::ValueInfoProto {
+        name: name.to_string(),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn test_flatten_with_explicit_stop_axis_uses_output_shape() {
     let mut converter = Converter::new();
@@ -444,6 +474,425 @@ fn test_sanitize_graph_materializes_initializer_only_outputs() {
     assert_eq!(graph.node.len(), 1);
     assert_eq!(graph.node[0].op_type, "Constant");
     assert_eq!(graph.node[0].output, vec!["const_out"]);
+}
+
+#[test]
+fn test_canonicalize_graph_removes_identity_chain_without_changing_output_name() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Identity".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["tmp".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["tmp".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Relu");
+    assert_eq!(graph.node[0].input, vec!["x"]);
+    assert_eq!(graph.output[0].name, "y");
+}
+
+#[test]
+fn test_canonicalize_graph_keeps_identity_when_output_is_external() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![onnx::NodeProto {
+            op_type: "Identity".to_string(),
+            input: vec!["x".to_string()],
+            output: vec!["y".to_string()],
+            ..Default::default()
+        }],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Identity");
+    assert_eq!(graph.node[0].output, vec!["y"]);
+}
+
+#[test]
+fn test_canonicalize_graph_collapses_duplicate_cast_chain() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            test_cast_node("x", "tmp", dt::INT64),
+            test_cast_node("tmp", "y", dt::INT64),
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Cast");
+    assert_eq!(graph.node[0].input, vec!["x"]);
+    assert_eq!(graph.node[0].output, vec!["y"]);
+}
+
+#[test]
+fn test_canonicalize_graph_does_not_collapse_different_cast_dtypes() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            test_cast_node("x", "tmp", dt::FLOAT),
+            test_cast_node("tmp", "y", dt::INT64),
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 2);
+    assert_eq!(graph.node[1].input, vec!["tmp"]);
+}
+
+#[test]
+fn test_canonicalize_graph_removes_canceling_unsqueeze_squeeze_pair() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        initializer: vec![test_i64_tensor("axes", &[0])],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Unsqueeze".to_string(),
+                input: vec!["x".to_string(), "axes".to_string()],
+                output: vec!["tmp".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Squeeze".to_string(),
+                input: vec!["tmp".to_string(), "axes".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["y".to_string()],
+                output: vec!["z".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("z")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Relu");
+    assert_eq!(graph.node[0].input, vec!["x"]);
+}
+
+#[test]
+fn test_canonicalize_graph_keeps_shape_adapter_pair_when_temp_has_extra_consumer() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        initializer: vec![test_i64_tensor("axes", &[0])],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Unsqueeze".to_string(),
+                input: vec!["x".to_string(), "axes".to_string()],
+                output: vec!["tmp".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Squeeze".to_string(),
+                input: vec!["tmp".to_string(), "axes".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["tmp".to_string()],
+                output: vec!["z".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y"), test_value_info("z")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.node.len(), 3);
+    assert_eq!(graph.node[1].input[0], "tmp");
+    assert_eq!(graph.node[2].input[0], "tmp");
+}
+
+#[test]
+fn test_canonicalize_graph_deduplicates_byte_identical_initializers() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        initializer: vec![
+            test_i64_tensor("axes_a", &[0]),
+            test_i64_tensor("axes_b", &[0]),
+        ],
+        node: vec![onnx::NodeProto {
+            op_type: "Unsqueeze".to_string(),
+            input: vec!["x".to_string(), "axes_b".to_string()],
+            output: vec!["y".to_string()],
+            ..Default::default()
+        }],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.initializer.len(), 1);
+    assert_eq!(graph.initializer[0].name, "axes_a");
+    assert_eq!(graph.node[0].input, vec!["x", "axes_a"]);
+}
+
+#[test]
+fn test_prepare_graph_for_export_prunes_dead_helper_nodes() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Shape".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["dead_shape".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Relu");
+}
+
+#[test]
+fn test_prepare_graph_for_export_prunes_initializers_orphaned_by_dead_helpers() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        initializer: vec![test_i64_tensor("dead_axes", &[0])],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Unsqueeze".to_string(),
+                input: vec!["x".to_string(), "dead_axes".to_string()],
+                output: vec!["dead_unsqueeze".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Relu");
+    assert!(graph.initializer.is_empty());
+}
+
+#[test]
+fn test_prepare_graph_for_export_keeps_unreviewed_dead_node() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Add".to_string(),
+                input: vec!["x".to_string(), "x".to_string()],
+                output: vec!["dead_add".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Relu".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+
+    assert_eq!(graph.node.len(), 2);
+    assert_eq!(graph.node[0].op_type, "Add");
+}
+
+#[test]
+fn test_prune_dead_nodes_is_idempotent() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Shape".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["dead_shape".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Identity".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["y".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prune_dead_nodes(&mut graph);
+    let once = graph.clone();
+    Converter::prune_dead_nodes(&mut graph);
+
+    assert_eq!(graph, once);
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].output, vec!["y"]);
+}
+
+#[test]
+fn test_prepare_graph_for_export_applies_passes_to_subgraphs() {
+    let then_graph = onnx::GraphProto {
+        input: vec![test_value_info("sub_x")],
+        initializer: vec![
+            test_i64_tensor("sub_axes_a", &[0]),
+            test_i64_tensor("sub_axes_b", &[0]),
+        ],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Identity".to_string(),
+                input: vec!["sub_x".to_string()],
+                output: vec!["sub_tmp".to_string()],
+                ..Default::default()
+            },
+            onnx::NodeProto {
+                op_type: "Unsqueeze".to_string(),
+                input: vec!["sub_tmp".to_string(), "sub_axes_b".to_string()],
+                output: vec!["sub_out".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("sub_out")],
+        ..Default::default()
+    };
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("cond"), test_value_info("sub_x")],
+        node: vec![onnx::NodeProto {
+            op_type: "If".to_string(),
+            input: vec!["cond".to_string()],
+            output: vec!["y".to_string()],
+            attribute: vec![crate::helper::attr_graph("then_branch", then_graph)],
+            ..Default::default()
+        }],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+
+    let subgraph = graph.node[0].attribute[0].g.as_ref().unwrap();
+    assert_eq!(subgraph.node.len(), 1);
+    assert_eq!(subgraph.node[0].input, vec!["sub_x", "sub_axes_b"]);
+    assert_eq!(subgraph.initializer.len(), 1);
+    assert_eq!(subgraph.initializer[0].name, "sub_axes_b");
+}
+
+#[test]
+fn test_prepare_graph_for_export_is_idempotent() {
+    let mut graph = onnx::GraphProto {
+        input: vec![test_value_info("x")],
+        initializer: vec![
+            test_i64_tensor("axes_a", &[0]),
+            test_i64_tensor("axes_b", &[0]),
+        ],
+        node: vec![
+            onnx::NodeProto {
+                op_type: "Identity".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["id_tmp".to_string()],
+                ..Default::default()
+            },
+            test_cast_node("id_tmp", "cast_tmp", dt::INT64),
+            test_cast_node("cast_tmp", "y", dt::INT64),
+            onnx::NodeProto {
+                op_type: "Shape".to_string(),
+                input: vec!["x".to_string()],
+                output: vec!["dead_shape".to_string()],
+                ..Default::default()
+            },
+        ],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+    let once = graph.clone();
+    Converter::prepare_graph_for_export(&mut graph).unwrap();
+
+    assert_eq!(graph, once);
+}
+
+#[test]
+fn test_prepare_graph_for_export_depth_guard_reports_clear_error() {
+    let mut nested = onnx::GraphProto {
+        output: vec![test_value_info("leaf")],
+        node: vec![onnx::NodeProto {
+            op_type: "Identity".to_string(),
+            input: vec!["leaf".to_string()],
+            output: vec!["leaf".to_string()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for depth in 0..130 {
+        nested = onnx::GraphProto {
+            input: vec![test_value_info(&format!("x_{depth}"))],
+            node: vec![onnx::NodeProto {
+                op_type: "If".to_string(),
+                input: vec![format!("x_{depth}")],
+                output: vec![format!("y_{depth}")],
+                attribute: vec![crate::helper::attr_graph("then_branch", nested)],
+                ..Default::default()
+            }],
+            output: vec![test_value_info(&format!("y_{depth}"))],
+            ..Default::default()
+        };
+    }
+
+    let err = Converter::prepare_graph_for_export(&mut nested).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("maximum ONNX subgraph cleanup depth")
+    );
 }
 
 #[test]
