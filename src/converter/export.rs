@@ -8,6 +8,20 @@ use crate::helper;
 use crate::proto::onnx;
 
 const MAX_EXPORT_SUBGRAPH_DEPTH: usize = 128;
+const MAX_DEDUP_INITIALIZER_PAYLOAD_BYTES: usize = 4096;
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct InitializerContentKey {
+    dims: Vec<i64>,
+    data_type: i32,
+    float_data: Vec<u32>,
+    int32_data: Vec<i32>,
+    string_data: Vec<Vec<u8>>,
+    int64_data: Vec<i64>,
+    raw_data: Vec<u8>,
+    double_data: Vec<u64>,
+    uint64_data: Vec<u64>,
+}
 
 impl super::Converter {
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -208,15 +222,15 @@ impl super::Converter {
     }
 
     fn resolve_replacement(name: &str, replacements: &HashMap<String, String>) -> Option<String> {
-        let mut current = replacements.get(name)?;
+        let mut current = replacements.get(name)?.as_str();
         let mut seen = HashSet::new();
         while let Some(next) = replacements.get(current) {
-            if !seen.insert(current.clone()) {
+            if !seen.insert(current) {
                 break;
             }
-            current = next;
+            current = next.as_str();
         }
-        Some(current.clone())
+        Some(current.to_string())
     }
 
     fn graph_output_names(graph: &onnx::GraphProto) -> HashSet<String> {
@@ -324,10 +338,46 @@ impl super::Converter {
         lhs_axes == rhs_axes
     }
 
-    fn initializer_content_key(tensor: &onnx::TensorProto) -> Vec<u8> {
-        let mut key_tensor = tensor.clone();
-        key_tensor.name.clear();
-        key_tensor.encode_to_vec()
+    fn initializer_payload_len(tensor: &onnx::TensorProto) -> usize {
+        tensor.raw_data.len()
+            + tensor.float_data.len() * std::mem::size_of::<f32>()
+            + tensor.int32_data.len() * std::mem::size_of::<i32>()
+            + tensor.string_data.iter().map(Vec::len).sum::<usize>()
+            + tensor.int64_data.len() * std::mem::size_of::<i64>()
+            + tensor.double_data.len() * std::mem::size_of::<f64>()
+            + tensor.uint64_data.len() * std::mem::size_of::<u64>()
+    }
+
+    fn initializer_content_key(tensor: &onnx::TensorProto) -> Option<InitializerContentKey> {
+        if tensor.segment.is_some()
+            || !tensor.external_data.is_empty()
+            || tensor.data_location != 0
+            || !tensor.doc_string.is_empty()
+            || !tensor.metadata_props.is_empty()
+            || Self::initializer_payload_len(tensor) > MAX_DEDUP_INITIALIZER_PAYLOAD_BYTES
+        {
+            return None;
+        }
+
+        Some(InitializerContentKey {
+            dims: tensor.dims.clone(),
+            data_type: tensor.data_type,
+            float_data: tensor
+                .float_data
+                .iter()
+                .map(|value| value.to_bits())
+                .collect(),
+            int32_data: tensor.int32_data.clone(),
+            string_data: tensor.string_data.clone(),
+            int64_data: tensor.int64_data.clone(),
+            raw_data: tensor.raw_data.clone(),
+            double_data: tensor
+                .double_data
+                .iter()
+                .map(|value| value.to_bits())
+                .collect(),
+            uint64_data: tensor.uint64_data.clone(),
+        })
     }
 
     fn canonicalize_graph_checked(
@@ -535,7 +585,7 @@ impl super::Converter {
 
     fn dedup_byte_identical_initializers(graph: &mut onnx::GraphProto) -> bool {
         let graph_outputs = Self::graph_output_names(graph);
-        let mut canonical_by_content: HashMap<Vec<u8>, String> = HashMap::new();
+        let mut canonical_by_content: HashMap<InitializerContentKey, String> = HashMap::new();
         let mut replacements = HashMap::new();
         let mut deduped = Vec::with_capacity(graph.initializer.len());
 
@@ -544,13 +594,14 @@ impl super::Converter {
                 deduped.push(initializer);
                 continue;
             }
-            let key = Self::initializer_content_key(&initializer);
-            if let Some(canonical_name) = canonical_by_content.get(&key) {
-                replacements.insert(initializer.name, canonical_name.clone());
-            } else {
+            if let Some(key) = Self::initializer_content_key(&initializer) {
+                if let Some(canonical_name) = canonical_by_content.get(&key) {
+                    replacements.insert(initializer.name, canonical_name.clone());
+                    continue;
+                }
                 canonical_by_content.insert(key, initializer.name.clone());
-                deduped.push(initializer);
             }
+            deduped.push(initializer);
         }
 
         graph.initializer = deduped;

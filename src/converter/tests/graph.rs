@@ -663,6 +663,42 @@ fn test_canonicalize_graph_deduplicates_byte_identical_initializers() {
 }
 
 #[test]
+fn test_canonicalize_graph_does_not_deduplicate_large_initializers() {
+    let large_raw = vec![7_u8; 8192];
+    let mut graph = onnx::GraphProto {
+        initializer: vec![
+            onnx::TensorProto {
+                name: "weight_a".to_string(),
+                dims: vec![2048],
+                data_type: dt::FLOAT,
+                raw_data: large_raw.clone(),
+                ..Default::default()
+            },
+            onnx::TensorProto {
+                name: "weight_b".to_string(),
+                dims: vec![2048],
+                data_type: dt::FLOAT,
+                raw_data: large_raw,
+                ..Default::default()
+            },
+        ],
+        node: vec![onnx::NodeProto {
+            op_type: "Add".to_string(),
+            input: vec!["weight_a".to_string(), "weight_b".to_string()],
+            output: vec!["y".to_string()],
+            ..Default::default()
+        }],
+        output: vec![test_value_info("y")],
+        ..Default::default()
+    };
+
+    Converter::canonicalize_graph(&mut graph);
+
+    assert_eq!(graph.initializer.len(), 2);
+    assert_eq!(graph.node[0].input, vec!["weight_a", "weight_b"]);
+}
+
+#[test]
 fn test_prepare_graph_for_export_prunes_dead_helper_nodes() {
     let mut graph = onnx::GraphProto {
         input: vec![test_value_info("x")],
