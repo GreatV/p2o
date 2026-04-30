@@ -78,12 +78,24 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          VERSION=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "p2o") | .version')
-          if curl -sfI "https://crates.io/api/v1/crates/p2o/$VERSION" >/dev/null; then
-            echo "p2o $VERSION already on crates.io, skipping"
-          else
-            cargo publish
+          NAME=p2o
+          VERSION=${GITHUB_REF#refs/tags/v}
+          INDEX_URL="https://index.crates.io/3/p/$NAME"
+          if curl -fsS "$INDEX_URL" \
+             | jq -e --arg v "$VERSION" 'select(.vers==$v)' >/dev/null; then
+            echo "$NAME $VERSION already on crates.io, skipping"
+            exit 0
+          fi
+          set +e
+          output=$(cargo publish 2>&1)
+          status=$?
+          echo "$output"
+          if [ $status -ne 0 ]; then
+            if echo "$output" | grep -qE "already (exists on crates\.io|uploaded)"; then
+              echo "Version already on crates.io, treating as success"
+              exit 0
+            fi
+            exit $status
           fi
 
   # Stage 3: Build & publish PyPI wheels
