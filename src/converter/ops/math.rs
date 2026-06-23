@@ -797,7 +797,8 @@ impl super::super::Converter {
             output: vec![self.get_tensor_name(out_id)?],
             ..Default::default()
         };
-        node.attribute.push(helper::attr_float("alpha", alpha as f32));
+        node.attribute
+            .push(helper::attr_float("alpha", alpha as f32));
         self.onnx_graph.node.push(node);
         Ok(())
     }
