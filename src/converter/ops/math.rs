@@ -785,10 +785,10 @@ impl super::super::Converter {
             bail!("leaky_relu missing inputs");
         }
 
-        // PIR attribute name for leaky_relu's negative slope
-        let alpha = helper::attr(op, "alpha")
-            .or_else(|| helper::attr(op, "negative_slope"))
-            .and_then(|d| d.as_f64())
+        // Use attr_f64 which handles string-encoded floats, integers,
+        // and special float representations (inf/nan) robustly
+        let alpha = helper::attr_f64(op, "alpha")
+            .or_else(|| helper::attr_f64(op, "negative_slope"))
             .unwrap_or(0.01);
 
         let mut node = onnx::NodeProto {
@@ -815,27 +815,27 @@ impl super::super::Converter {
         // PIR weight is stored as [in_dim, out_dim] (unlike PyTorch [out_dim, in_dim])
         // So ONNX MatMul: X[B,T,in_dim] @ W[in_dim,out_dim] = [B,T,out_dim]
         // No transpose needed! Just MatMul + optional Add bias.
-        let mm_name = format!("linear_mm_{}", out_id);
+        //
+        // In PIR, an optional bias that is omitted has input ID 0.
+        let has_bias = inputs.len() > 2 && inputs[2] != 0;
+        let mm_output = if has_bias {
+            format!("linear_mm_{}", out_id)
+        } else {
+            self.get_tensor_name(out_id)?
+        };
+
         self.onnx_graph.node.push(onnx::NodeProto {
             op_type: "MatMul".to_string(),
             input: vec![in_name, weight_name],
-            output: vec![mm_name.clone()],
+            output: vec![mm_output.clone()],
             ..Default::default()
         });
 
-        // Add bias if present
-        if inputs.len() > 2 {
+        if has_bias {
             let bias_name = self.get_tensor_name(inputs[2])?;
             self.onnx_graph.node.push(onnx::NodeProto {
                 op_type: "Add".to_string(),
-                input: vec![mm_name, bias_name],
-                output: vec![self.get_tensor_name(out_id)?],
-                ..Default::default()
-            });
-        } else {
-            self.onnx_graph.node.push(onnx::NodeProto {
-                op_type: "Identity".to_string(),
-                input: vec![mm_name],
+                input: vec![mm_output, bias_name],
                 output: vec![self.get_tensor_name(out_id)?],
                 ..Default::default()
             });
