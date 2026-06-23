@@ -213,6 +213,12 @@ pass2_dispatch:
   - op: "1.prelu"
     kind: simple
     method: op_prelu
+  - op: "1.leaky_relu"
+    kind: simple
+    method: op_leaky_relu
+  - op: "1.linear_v2"
+    kind: simple
+    method: op_linear_v2
   - op: "1.put_along_axis"
     kind: simple
     method: op_put_along_axis

@@ -778,6 +778,72 @@ impl super::super::Converter {
         Ok(())
     }
 
+    pub fn op_leaky_relu(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("leaky_relu missing inputs");
+        }
+
+        // Use attr_f64 which handles string-encoded floats, integers,
+        // and special float representations (inf/nan) robustly
+        let alpha = helper::attr_f64(op, "alpha")
+            .or_else(|| helper::attr_f64(op, "negative_slope"))
+            .unwrap_or(0.01);
+
+        let mut node = onnx::NodeProto {
+            op_type: "LeakyRelu".to_string(),
+            input: vec![self.get_tensor_name(inputs[0])?],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        node.attribute
+            .push(helper::attr_float("alpha", alpha as f32));
+        self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_linear_v2(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 2 {
+            bail!("linear_v2 needs at least input and weight");
+        }
+
+        let in_name = self.get_tensor_name(inputs[0])?;
+        let weight_name = self.get_tensor_name(inputs[1])?;
+
+        // PIR weight is stored as [in_dim, out_dim] (unlike PyTorch [out_dim, in_dim])
+        // So ONNX MatMul: X[B,T,in_dim] @ W[in_dim,out_dim] = [B,T,out_dim]
+        // No transpose needed! Just MatMul + optional Add bias.
+        //
+        // In PIR, an optional bias that is omitted has input ID 0.
+        let has_bias = inputs.len() > 2 && inputs[2] != 0;
+        let mm_output = if has_bias {
+            format!("linear_mm_{}", out_id)
+        } else {
+            self.get_tensor_name(out_id)?
+        };
+
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "MatMul".to_string(),
+            input: vec![in_name, weight_name],
+            output: vec![mm_output.clone()],
+            ..Default::default()
+        });
+
+        if has_bias {
+            let bias_name = self.get_tensor_name(inputs[2])?;
+            self.onnx_graph.node.push(onnx::NodeProto {
+                op_type: "Add".to_string(),
+                input: vec![mm_output, bias_name],
+                output: vec![self.get_tensor_name(out_id)?],
+                ..Default::default()
+            });
+        }
+        Ok(())
+    }
+
     pub fn op_multinomial(&mut self, op: &Value) -> anyhow::Result<()> {
         self.require_opset(7, "multinomial")?;
 
