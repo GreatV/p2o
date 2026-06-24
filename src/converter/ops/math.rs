@@ -1080,4 +1080,162 @@ impl super::super::Converter {
             ),
         }
     }
+
+    pub fn op_relu6(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("relu6 missing input");
+        }
+        let in_name = self.get_tensor_name(inputs[0])?;
+        let mut node = onnx::NodeProto {
+            op_type: "Clip".to_string(),
+            input: vec![in_name],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        // ONNX opset >= 11 requires min/max as tensor inputs, not attributes
+        if self.target_opset >= 11 {
+            let min_name = format!("relu6_min_{}", out_id);
+            let max_name = format!("relu6_max_{}", out_id);
+            let dtype = self
+                .maybe_onnx_dtype_for_tensor_id(inputs[0])?
+                .unwrap_or(dt::FLOAT);
+            self.push_numeric_initializer(min_name.clone(), vec![], dtype, &[0.0])?;
+            self.push_numeric_initializer(max_name.clone(), vec![], dtype, &[6.0])?;
+            node.input.push(min_name);
+            node.input.push(max_name);
+        } else {
+            node.attribute.push(helper::attr_float("min", 0.0));
+            node.attribute.push(helper::attr_float("max", 6.0));
+        }
+        self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_softplus(&mut self, op: &Value) -> anyhow::Result<()> {
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("softplus missing input");
+        }
+        // ONNX Softplus has no beta/threshold attrs. Use generic path
+        // with default semantics (beta=1, threshold=20).
+        self.convert_generic_op("softplus", op)
+    }
+
+    pub fn op_thresholded_relu(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("thresholded_relu missing input");
+        }
+        let alpha = helper::attr_f64(op, "threshold").unwrap_or(1.0);
+        let mut node = onnx::NodeProto {
+            op_type: "ThresholdedRelu".to_string(),
+            input: vec![self.get_tensor_name(inputs[0])?],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        node.attribute
+            .push(helper::attr_float("alpha", alpha as f32));
+        self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_softshrink(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("softshrink missing input");
+        }
+        let lambd = helper::attr_f64(op, "threshold").unwrap_or(0.5);
+        // ONNX has no Softshrink op; use Shrink with bias=0
+        let mut node = onnx::NodeProto {
+            op_type: "Shrink".to_string(),
+            input: vec![self.get_tensor_name(inputs[0])?],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        node.attribute
+            .push(helper::attr_float("lambd", lambd as f32));
+        node.attribute.push(helper::attr_float("bias", 0.0));
+        self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_square(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("square missing input");
+        }
+        let in_name = self.get_tensor_name(inputs[0])?;
+        self.add_binary_node(
+            "Mul",
+            in_name.clone(),
+            in_name,
+            self.get_tensor_name(out_id)?,
+        );
+        Ok(())
+    }
+
+    pub fn op_log1p(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("log1p missing input");
+        }
+        let in_name = self.get_tensor_name(inputs[0])?;
+        let one_name = format!("log1p_one_{}", out_id);
+        let added_name = format!("log1p_add_{}", out_id);
+        // Match input dtype to avoid type mismatch (f32 vs f64 vs f16)
+        let dtype = self
+            .maybe_onnx_dtype_for_tensor_id(inputs[0])?
+            .unwrap_or(dt::FLOAT);
+        self.push_numeric_initializer(one_name.clone(), vec![], dtype, &[1.0])?;
+        self.add_binary_node("Add", in_name, one_name, added_name.clone());
+        let log = onnx::NodeProto {
+            op_type: "Log".to_string(),
+            input: vec![added_name],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        self.onnx_graph.node.push(log);
+        Ok(())
+    }
+
+    pub fn op_logsigmoid(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("logsigmoid missing input");
+        }
+        let in_name = self.get_tensor_name(inputs[0])?;
+        // Stable lowering: logsigmoid(x) = log(sigmoid(x)) = -Softplus(-x)
+        // Avoids sigmoid underflow for large negative x.
+        let neg_in_name = format!("logsigmoid_neg_in_{}", out_id);
+        let sp_name = format!("logsigmoid_softplus_{}", out_id);
+        let neg_in = onnx::NodeProto {
+            op_type: "Neg".to_string(),
+            input: vec![in_name],
+            output: vec![neg_in_name.clone()],
+            ..Default::default()
+        };
+        self.onnx_graph.node.push(neg_in);
+        let sp = onnx::NodeProto {
+            op_type: "Softplus".to_string(),
+            input: vec![neg_in_name],
+            output: vec![sp_name.clone()],
+            ..Default::default()
+        };
+        self.onnx_graph.node.push(sp);
+        let neg_out = onnx::NodeProto {
+            op_type: "Neg".to_string(),
+            input: vec![sp_name],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        };
+        self.onnx_graph.node.push(neg_out);
+        Ok(())
+    }
 }
