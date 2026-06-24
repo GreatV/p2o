@@ -121,6 +121,7 @@ struct GraphFacts {
     initializers: HashMap<String, usize>,
     graph_outputs: HashSet<String>,
     shapes: HashMap<String, Vec<i64>>,
+    dtypes: HashMap<String, i32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -331,6 +332,14 @@ impl GraphOptimizer {
         Self::add_value_info_shapes(&mut shapes, &graph.input);
         Self::add_value_info_shapes(&mut shapes, &graph.value_info);
         Self::add_value_info_shapes(&mut shapes, &graph.output);
+        let mut dtypes = graph
+            .initializer
+            .iter()
+            .map(|tensor| (tensor.name.clone(), tensor.data_type))
+            .collect::<HashMap<_, _>>();
+        Self::add_value_info_dtypes(&mut dtypes, &graph.input);
+        Self::add_value_info_dtypes(&mut dtypes, &graph.value_info);
+        Self::add_value_info_dtypes(&mut dtypes, &graph.output);
 
         GraphFacts {
             producers,
@@ -338,6 +347,7 @@ impl GraphOptimizer {
             initializers,
             graph_outputs,
             shapes,
+            dtypes,
         }
     }
 
@@ -382,6 +392,21 @@ impl GraphOptimizer {
                 })
                 .collect::<Vec<_>>();
             shapes.insert(value_info.name.clone(), dims);
+        }
+    }
+
+    fn add_value_info_dtypes(
+        dtypes: &mut HashMap<String, i32>,
+        value_infos: &[onnx::ValueInfoProto],
+    ) {
+        for value_info in value_infos {
+            let Some(r#type) = value_info.r#type.as_ref() else {
+                continue;
+            };
+            let Some(onnx::type_proto::Value::TensorType(tensor)) = r#type.value.as_ref() else {
+                continue;
+            };
+            dtypes.insert(value_info.name.clone(), tensor.elem_type);
         }
     }
 
@@ -702,6 +727,18 @@ impl GraphOptimizer {
             .get(name)
             .cloned()
             .or_else(|| Self::const_value(graph, facts, name).map(|value| value.tensor.dims))
+    }
+
+    fn tensor_dtype(graph: &onnx::GraphProto, facts: &GraphFacts, name: &str) -> Option<i32> {
+        facts
+            .dtypes
+            .get(name)
+            .copied()
+            .or_else(|| Self::const_value(graph, facts, name).map(|value| value.tensor.data_type))
+    }
+
+    fn gemm_supported_dtype(dtype: i32) -> bool {
+        matches!(dtype, dt::FLOAT16 | dt::FLOAT | dt::DOUBLE | dt::BFLOAT16)
     }
 
     fn static_axes(
@@ -1248,6 +1285,9 @@ impl GraphOptimizer {
             let producer_input = producer.input[0].clone();
             if Self::is_identity_perm(&composed) {
                 let output = graph.node[consumer_idx].output[0].clone();
+                if !Self::rewrite_is_safe(graph, &output, &producer_input) {
+                    continue;
+                }
                 Self::replace_inputs_recursive(graph, &output, &producer_input);
                 remove[producer_idx] = true;
                 remove[consumer_idx] = true;
@@ -1714,6 +1754,18 @@ impl GraphOptimizer {
             let Some(bias) = Self::const_value(graph, &facts, &bias_name) else {
                 continue;
             };
+            let Some(lhs_dtype) = Self::tensor_dtype(graph, &facts, &matmul_inputs[0]) else {
+                continue;
+            };
+            let Some(rhs_dtype) = Self::tensor_dtype(graph, &facts, &matmul_inputs[1]) else {
+                continue;
+            };
+            if !Self::gemm_supported_dtype(lhs_dtype)
+                || lhs_dtype != rhs_dtype
+                || bias.tensor.data_type != lhs_dtype
+            {
+                continue;
+            }
             // ONNX Gemm requires C to be unidirectionally broadcastable to (M, N)
             // and always produces a rank-2 (M, N) result, whereas the original Add
             // uses bidirectional broadcasting. Only fuse when the bias cannot expand
@@ -1804,6 +1856,19 @@ mod tests {
         tensor
     }
 
+    fn i64_tensor_with_dims(name: &str, dims: Vec<i64>, values: &[i64]) -> onnx::TensorProto {
+        let mut tensor = onnx::TensorProto {
+            name: name.to_string(),
+            dims,
+            data_type: dt::INT64,
+            ..Default::default()
+        };
+        for &value in values {
+            tensor.raw_data.extend_from_slice(&value.to_le_bytes());
+        }
+        tensor
+    }
+
     fn node(op_type: &str, inputs: &[&str], outputs: &[&str]) -> onnx::NodeProto {
         onnx::NodeProto {
             op_type: op_type.to_string(),
@@ -1821,12 +1886,16 @@ mod tests {
     }
 
     fn value_info(name: &str, dims: &[i64]) -> onnx::ValueInfoProto {
+        value_info_with_dtype(name, dims, dt::FLOAT)
+    }
+
+    fn value_info_with_dtype(name: &str, dims: &[i64], elem_type: i32) -> onnx::ValueInfoProto {
         onnx::ValueInfoProto {
             name: name.to_string(),
             r#type: Some(onnx::TypeProto {
                 value: Some(onnx::type_proto::Value::TensorType(
                     onnx::type_proto::Tensor {
-                        elem_type: dt::FLOAT,
+                        elem_type,
                         shape: Some(onnx::TensorShapeProto {
                             dim: dims
                                 .iter()
@@ -2046,6 +2115,50 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_skips_transpose_pair_when_subgraph_shadows_replacement() {
+        let mut t1 = node("Transpose", &["x"], &["t1"]);
+        t1.attribute.push(helper::attr_ints("perm", &[1, 0]));
+        let mut t2 = node("Transpose", &["t1"], &["out"]);
+        t2.attribute.push(helper::attr_ints("perm", &[1, 0]));
+        let then_graph = onnx::GraphProto {
+            input: vec![graph_output("x")],
+            node: vec![node("Identity", &["out"], &["then_out"])],
+            output: vec![graph_output("then_out")],
+            ..Default::default()
+        };
+        let mut if_node = node("If", &["cond"], &["if_out"]);
+        if_node.attribute.push(onnx::AttributeProto {
+            name: "then_branch".to_string(),
+            g: Some(then_graph),
+            ..Default::default()
+        });
+        let mut graph = onnx::GraphProto {
+            node: vec![t1, t2, if_node],
+            output: vec![graph_output("if_out")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert!(
+            graph
+                .node
+                .iter()
+                .any(|node| node.op_type == "Transpose" && node.output == vec!["out"])
+        );
+        let then_graph = graph
+            .node
+            .iter()
+            .find(|node| node.op_type == "If")
+            .unwrap()
+            .attribute[0]
+            .g
+            .as_ref()
+            .unwrap();
+        assert_eq!(then_graph.node[0].input, vec!["out"]);
+    }
+
+    #[test]
     fn optimizer_skips_rewrite_when_subgraph_shadows_target() {
         let then_graph = onnx::GraphProto {
             input: vec![graph_output("x")],
@@ -2176,6 +2289,29 @@ mod tests {
         assert_eq!(graph.node[0].op_type, "Gemm");
         assert_eq!(graph.node[0].input, vec!["x", "w", "bias"]);
         assert_eq!(graph.node[0].output, vec!["out"]);
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_integer_matmul_add_to_gemm() {
+        let mut graph = onnx::GraphProto {
+            initializer: vec![i64_tensor_with_dims("bias", vec![3], &[1, 2, 3])],
+            input: vec![
+                value_info_with_dtype("x", &[2, 4], dt::INT64),
+                value_info_with_dtype("w", &[4, 3], dt::INT64),
+            ],
+            node: vec![
+                node("MatMul", &["x", "w"], &["mm"]),
+                node("Add", &["mm", "bias"], &["out"]),
+            ],
+            output: vec![graph_output("out")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert_eq!(graph.node.len(), 2);
+        assert_eq!(graph.node[0].op_type, "MatMul");
+        assert_eq!(graph.node[1].op_type, "Add");
     }
 
     #[test]

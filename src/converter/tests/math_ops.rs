@@ -295,11 +295,43 @@ fn test_greater_equal_lowers_before_opset_12() {
         .unwrap();
 
     let graph = &converter.onnx_graph;
-    assert_eq!(graph.node.len(), 2);
+    assert_eq!(graph.node.len(), 3);
+    assert_eq!(graph.node[0].op_type, "Greater");
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[1].op_type, "Equal");
+    assert_eq!(graph.node[1].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[2].op_type, "Or");
+    assert_eq!(graph.node[2].output, vec!["tensor_12"]);
+}
+
+#[test]
+fn test_less_equal_lowers_before_opset_12_with_nan_safe_ordered_compare() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(11);
+
+    let op_json = json!({
+        "#": "1.less_equal",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.less_equal", &op_json)
+        .unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 3);
     assert_eq!(graph.node[0].op_type, "Less");
     assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
-    assert_eq!(graph.node[1].op_type, "Not");
-    assert_eq!(graph.node[1].output, vec!["tensor_12"]);
+    assert_eq!(graph.node[1].op_type, "Equal");
+    assert_eq!(graph.node[1].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[2].op_type, "Or");
+    assert_eq!(graph.node[2].output, vec!["tensor_12"]);
 }
 
 #[test]

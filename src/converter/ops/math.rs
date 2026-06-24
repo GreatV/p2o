@@ -440,7 +440,7 @@ impl super::super::Converter {
         &mut self,
         op: &Value,
         direct_op_type: &str,
-        fallback_op_type: &str,
+        ordered_op_type: &str,
     ) -> anyhow::Result<()> {
         let out_id = helper::op_out_id(op)?;
         let inputs = helper::op_input_ids(op);
@@ -455,23 +455,25 @@ impl super::super::Converter {
             return Ok(());
         }
 
-        let compare_name = format!("{}_compare_{}", direct_op_type.to_lowercase(), out_id);
-        self.add_binary_node(fallback_op_type, lhs, rhs, compare_name.clone());
-        self.onnx_graph.node.push(onnx::NodeProto {
-            op_type: "Not".to_string(),
-            input: vec![compare_name],
-            output: vec![out_name],
-            ..Default::default()
-        });
+        let ordered_name = format!("{}_ordered_{}", direct_op_type.to_lowercase(), out_id);
+        let equal_name = format!("{}_equal_{}", direct_op_type.to_lowercase(), out_id);
+        self.add_binary_node(
+            ordered_op_type,
+            lhs.clone(),
+            rhs.clone(),
+            ordered_name.clone(),
+        );
+        self.add_binary_node("Equal", lhs, rhs, equal_name.clone());
+        self.add_binary_node("Or", ordered_name, equal_name, out_name);
         Ok(())
     }
 
     pub fn op_greater_equal(&mut self, op: &Value) -> anyhow::Result<()> {
-        self.op_binary_compare(op, "GreaterOrEqual", "Less")
+        self.op_binary_compare(op, "GreaterOrEqual", "Greater")
     }
 
     pub fn op_less_equal(&mut self, op: &Value) -> anyhow::Result<()> {
-        self.op_binary_compare(op, "LessOrEqual", "Greater")
+        self.op_binary_compare(op, "LessOrEqual", "Less")
     }
 
     pub fn op_gelu(&mut self, op: &Value) -> anyhow::Result<()> {

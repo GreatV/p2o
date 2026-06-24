@@ -181,21 +181,25 @@ def ensure_hf_model(model: ModelDownload, dry_run: bool) -> None:
         dir=model.model_dir.parent,
     ) as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
+        download_dir = temp_dir / "model"
+        download_dir.mkdir()
         for filename in REQUIRED_FILES:
             download_file(
-                hf_file_url(model.hf_repo, filename, model.hf_revision), temp_dir / filename
+                hf_file_url(model.hf_repo, filename, model.hf_revision),
+                download_dir / filename,
             )
         for filename in OPTIONAL_FILES:
             try:
                 download_file(
-                    hf_file_url(model.hf_repo, filename, model.hf_revision), temp_dir / filename
+                    hf_file_url(model.hf_repo, filename, model.hf_revision),
+                    download_dir / filename,
                 )
             except Exception as exc:
                 print(f"[warn] {model.name}: optional {filename} not downloaded ({exc})")
 
         if model.model_dir.exists():
             remove_existing(model.model_dir)
-        shutil.move(str(temp_dir), str(model.model_dir))
+        shutil.move(str(download_dir), str(model.model_dir))
 
     if not has_required_files(model.model_dir):
         raise FileNotFoundError(
