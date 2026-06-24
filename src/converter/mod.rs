@@ -14,8 +14,11 @@ use crate::proto::onnx;
 mod attr;
 mod export;
 mod ops;
+mod optimizer;
 mod value_info;
 mod weights;
+
+pub use optimizer::{OptimizationLevel, OptimizationReport};
 
 #[cfg(test)]
 mod tests;
@@ -146,6 +149,7 @@ pub struct Converter {
     pub(crate) onnx_graph: onnx::GraphProto,
     pub(crate) state: ConverterState,
     pub(crate) target_opset: i64,
+    pub(crate) optimization_level: OptimizationLevel,
     pub(crate) strict: bool,
     pub(crate) warned_multinomial_degraded: bool,
     pub(crate) fetch_name_cache: Option<FetchNameCache>,
@@ -177,6 +181,7 @@ impl Converter {
             },
             state: ConverterState::default(),
             target_opset: DEFAULT_OPSET,
+            optimization_level: OptimizationLevel::Basic,
             strict: false,
             warned_multinomial_degraded: false,
             fetch_name_cache: None,
@@ -185,6 +190,10 @@ impl Converter {
 
     pub fn set_target_opset(&mut self, opset: i64) {
         self.target_opset = opset;
+    }
+
+    pub fn set_optimization_level(&mut self, level: OptimizationLevel) {
+        self.optimization_level = level;
     }
 
     pub fn set_strict(&mut self, strict: bool) {
@@ -269,6 +278,7 @@ impl Converter {
             },
             state: self.state.clone(),
             target_opset: self.target_opset,
+            optimization_level: self.optimization_level,
             strict: self.strict,
             warned_multinomial_degraded: false,
             fetch_name_cache: None,

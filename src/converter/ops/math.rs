@@ -876,7 +876,7 @@ impl super::super::Converter {
 
         if !self.warned_multinomial_degraded {
             log::warn!(
-                "multinomial is lowered to deterministic ArgMax per AGENT.md inference contract"
+                "multinomial is lowered to deterministic ArgMax for inference; stochastic sampling is not preserved"
             );
             self.warned_multinomial_degraded = true;
         }
@@ -892,7 +892,7 @@ impl super::super::Converter {
             output: vec![argmax_output.clone()],
             ..Default::default()
         };
-        // Deterministic contract per AGENT.md: inference uses argmax instead of stochastic sampling.
+        // Deterministic inference contract: lower to argmax instead of stochastic sampling.
         node.attribute.push(helper::attr_int("axis", -1));
         node.attribute.push(helper::attr_int("keepdims", 1));
         node.attribute

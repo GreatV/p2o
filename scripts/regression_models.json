@@ -27,6 +27,102 @@
       }
     },
     {
+      "name": "ppocrv6_tiny_det",
+      "model_dir": "../inference_models/PP-OCRv6_tiny_det_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_tiny_det",
+      "default_opsets": [17],
+      "input_kind": "det",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 736, 736],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv6_tiny_rec",
+      "model_dir": "../inference_models/PP-OCRv6_tiny_rec_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_tiny_rec",
+      "default_opsets": [17],
+      "input_kind": "rec",
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 48, 320],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv6_small_det",
+      "model_dir": "../inference_models/PP-OCRv6_small_det_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_small_det",
+      "default_opsets": [17],
+      "input_kind": "det",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 736, 736],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv6_small_rec",
+      "model_dir": "../inference_models/PP-OCRv6_small_rec_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_small_rec",
+      "default_opsets": [17],
+      "input_kind": "rec",
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 48, 320],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv6_medium_det",
+      "model_dir": "../inference_models/PP-OCRv6_medium_det_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_medium_det",
+      "default_opsets": [17],
+      "input_kind": "det",
+      "diff_tolerance": {
+        "rtol": 0.001,
+        "atol": 0.005
+      },
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 736, 736],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
+      "name": "ppocrv6_medium_rec",
+      "model_dir": "../inference_models/PP-OCRv6_medium_rec_infer",
+      "hf_repo": "PaddlePaddle/PP-OCRv6_medium_rec",
+      "default_opsets": [17],
+      "input_kind": "rec",
+      "sample_inputs": {
+        "x": {
+          "shape": [1, 3, 48, 320],
+          "dtype": "float32",
+          "mode": "randn"
+        }
+      }
+    },
+    {
       "name": "slanet",
       "model_dir": "../inference_models/SLANet_infer",
       "default_opsets": [17],

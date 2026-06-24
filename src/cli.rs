@@ -1,8 +1,26 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-use crate::converter::DEFAULT_OPSET;
+use crate::converter::{DEFAULT_OPSET, OptimizationLevel};
 
-fn parse_supported_opset(raw: &str) -> Result<i64, String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetOpset {
+    Auto,
+    Version(i64),
+}
+
+impl TargetOpset {
+    pub fn resolve(&self) -> i64 {
+        match self {
+            Self::Auto => DEFAULT_OPSET,
+            Self::Version(opset) => *opset,
+        }
+    }
+}
+
+fn parse_target_opset(raw: &str) -> Result<TargetOpset, String> {
+    if raw.eq_ignore_ascii_case("auto") {
+        return Ok(TargetOpset::Auto);
+    }
     let opset = raw
         .parse::<i64>()
         .map_err(|_| format!("Invalid opset value: {raw}"))?;
@@ -11,7 +29,22 @@ fn parse_supported_opset(raw: &str) -> Result<i64, String> {
             "Target ONNX opset must be >= 10, got {opset}. Lower opsets are not supported."
         ));
     }
-    Ok(opset)
+    Ok(TargetOpset::Version(opset))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CliOptimizationLevel {
+    None,
+    Basic,
+}
+
+impl From<CliOptimizationLevel> for OptimizationLevel {
+    fn from(value: CliOptimizationLevel) -> Self {
+        match value {
+            CliOptimizationLevel::None => OptimizationLevel::None,
+            CliOptimizationLevel::Basic => OptimizationLevel::Basic,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -32,11 +65,15 @@ pub struct Cli {
     /// Target ONNX Opset version
     #[arg(
         long,
-        default_value_t = DEFAULT_OPSET,
-        value_parser = parse_supported_opset,
-        help = "Target ONNX opset version (>= 10, e.g. 17)"
+        default_value = "17",
+        value_parser = parse_target_opset,
+        help = "Target ONNX opset version (>= 10, e.g. 17) or auto"
     )]
-    pub opset: i64,
+    pub opset: TargetOpset,
+
+    /// ONNX graph optimization level.
+    #[arg(long, value_enum, default_value_t = CliOptimizationLevel::Basic)]
+    pub optimize: CliOptimizationLevel,
 
     /// Fail instead of applying lossy compatibility lowerings.
     #[arg(long, help = "Reject lossy conversions such as multinomial -> ArgMax")]
@@ -52,7 +89,23 @@ mod tests {
     fn test_cli_defaults_to_opset_17() {
         let cli =
             Cli::try_parse_from(["p2o", "model.json", "model.pdiparams", "model.onnx"]).unwrap();
-        assert_eq!(cli.opset, crate::converter::DEFAULT_OPSET);
+        assert_eq!(cli.opset.resolve(), crate::converter::DEFAULT_OPSET);
+        assert_eq!(cli.optimize, super::CliOptimizationLevel::Basic);
+    }
+
+    #[test]
+    fn test_cli_accepts_auto_opset() {
+        let cli = Cli::try_parse_from([
+            "p2o",
+            "model.json",
+            "model.pdiparams",
+            "model.onnx",
+            "--opset",
+            "auto",
+        ])
+        .unwrap();
+        assert_eq!(cli.opset, super::TargetOpset::Auto);
+        assert_eq!(cli.opset.resolve(), crate::converter::DEFAULT_OPSET);
     }
 
     #[test]

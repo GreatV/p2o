@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 
+use super::optimizer::GraphOptimizer;
 use crate::helper;
 use crate::proto::onnx;
 
@@ -719,6 +720,7 @@ impl super::Converter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn prepare_graph_for_export(graph: &mut onnx::GraphProto) -> anyhow::Result<()> {
         Self::sanitize_graph_checked(graph, true, 0)?;
         Self::canonicalize_graph_checked(graph, 0)?;
@@ -734,7 +736,23 @@ impl super::Converter {
     /// removes local post-lowering noise, and dead helper nodes are pruned before
     /// reference checks.
     pub fn export_onnx(&mut self, output_path: &str, opset_version: i64) -> anyhow::Result<()> {
-        Self::prepare_graph_for_export(&mut self.onnx_graph)?;
+        Self::sanitize_graph_checked(&mut self.onnx_graph, true, 0)?;
+        Self::canonicalize_graph_checked(&mut self.onnx_graph, 0)?;
+        let optimizer_options = self.optimizer_options();
+        let report = GraphOptimizer::optimize_graph(&mut self.onnx_graph, &optimizer_options)?;
+        if report.changed() {
+            log::info!(
+                "ONNX optimizer changed graph: nodes {} -> {}, initializers {} -> {}, passes {:?}",
+                report.nodes_before,
+                report.nodes_after,
+                report.initializers_before,
+                report.initializers_after,
+                report.pass_changes
+            );
+        }
+        Self::canonicalize_graph_checked(&mut self.onnx_graph, 0)?;
+        Self::prune_dead_nodes_checked(&mut self.onnx_graph, 0)?;
+        Self::prune_unused_initializers_checked(&mut self.onnx_graph, 0)?;
         self.validate()?;
         let graph = std::mem::take(&mut self.onnx_graph);
         let model = onnx::ModelProto {
