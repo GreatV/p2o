@@ -319,6 +319,82 @@ fn test_layer_norm_reconstructs_variance_output() {
         scalar_f32_initializer(&converter, "layer_norm_epsilon_15"),
         0.001
     );
+    // float32 input: epsilon is float32 and no cast is inserted.
+    let epsilon = converter
+        .onnx_graph
+        .initializer
+        .iter()
+        .find(|tensor| tensor.name == "layer_norm_epsilon_15")
+        .unwrap();
+    assert_eq!(epsilon.data_type, dt::FLOAT);
+    assert!(
+        !converter
+            .onnx_graph
+            .node
+            .iter()
+            .any(|node| node.op_type == "Cast")
+    );
+}
+
+#[test]
+fn test_layer_norm_variance_casts_to_float16_output_dtype() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+    // float16 input/variance: ONNX InvStdDev stays float32 (stash type), so the
+    // reconstruction must run in float32 and cast the variance to float16.
+    converter
+        .state
+        .tensor_types
+        .insert(10, "0.t_f16".to_string());
+    converter
+        .state
+        .tensor_types
+        .insert(15, "0.t_f16".to_string());
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "A": [
+            { "AT": { "#": "0.a_f32", "D": 0.001 }, "N": "epsilon" },
+            { "AT": { "#": "0.a_i32", "D": 2 }, "N": "begin_norm_axis" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 },
+            { "%": 14 },
+            { "%": 15 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap();
+
+    // LayerNormalization, Mul, Reciprocal, Sub, Cast.
+    assert_eq!(converter.onnx_graph.node.len(), 5);
+    let sub = &converter.onnx_graph.node[3];
+    assert_eq!(sub.op_type, "Sub");
+    assert_eq!(sub.output, vec!["layer_norm_variance_stash_15"]);
+    let cast = &converter.onnx_graph.node[4];
+    assert_eq!(cast.op_type, "Cast");
+    assert_eq!(cast.input, vec!["layer_norm_variance_stash_15"]);
+    assert_eq!(cast.output, vec!["tensor_15"]);
+    assert!(
+        cast.attribute
+            .iter()
+            .any(|attr| attr.name == "to" && attr.i == i64::from(dt::FLOAT16))
+    );
+    // epsilon is built in the float32 stash dtype, not float16.
+    let epsilon = converter
+        .onnx_graph
+        .initializer
+        .iter()
+        .find(|tensor| tensor.name == "layer_norm_epsilon_15")
+        .unwrap();
+    assert_eq!(epsilon.data_type, dt::FLOAT);
 }
 
 #[test]

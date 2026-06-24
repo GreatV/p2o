@@ -478,14 +478,23 @@ impl super::super::Converter {
 
         if let Some((variance_id, inv_stddev)) = variance_output {
             let epsilon = helper::attr_f64(op, "epsilon").unwrap_or(1.0e-5);
-            let data_type = match self.maybe_onnx_dtype_for_tensor_id(inputs[0])? {
+            // ONNX `LayerNormalization` emits `InvStdDev` as the stash type, which is
+            // float32 by default (`stash_type = 1`). Reconstruct the variance entirely
+            // in that dtype so the Mul/Reciprocal/Sub chain stays type-consistent, then
+            // cast to the Paddle variance output dtype if it differs (e.g. float16 or
+            // double) — otherwise ONNX checkers reject the mixed-dtype `Sub`.
+            let stash_dtype = dt::FLOAT;
+            let variance_dtype = match self.maybe_onnx_dtype_for_tensor_id(variance_id)? {
                 Some(dtype @ (dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)) => dtype,
-                _ => dt::FLOAT,
+                _ => match self.maybe_onnx_dtype_for_tensor_id(inputs[0])? {
+                    Some(dtype @ (dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)) => dtype,
+                    _ => stash_dtype,
+                },
             };
             let inv_stddev_sq = format!("layer_norm_inv_stddev_sq_{}", variance_id);
             let variance_plus_epsilon = format!("layer_norm_variance_plus_epsilon_{}", variance_id);
             let epsilon_name = format!("layer_norm_epsilon_{}", variance_id);
-            self.push_numeric_initializer(epsilon_name.clone(), vec![], data_type, &[epsilon])?;
+            self.push_numeric_initializer(epsilon_name.clone(), vec![], stash_dtype, &[epsilon])?;
             self.add_binary_node("Mul", inv_stddev.clone(), inv_stddev, inv_stddev_sq.clone());
             self.onnx_graph.node.push(onnx::NodeProto {
                 op_type: "Reciprocal".to_string(),
@@ -493,12 +502,27 @@ impl super::super::Converter {
                 output: vec![variance_plus_epsilon.clone()],
                 ..Default::default()
             });
-            self.add_binary_node(
-                "Sub",
-                variance_plus_epsilon,
-                epsilon_name,
-                self.get_tensor_name(variance_id)?,
-            );
+            if variance_dtype == stash_dtype {
+                self.add_binary_node(
+                    "Sub",
+                    variance_plus_epsilon,
+                    epsilon_name,
+                    self.get_tensor_name(variance_id)?,
+                );
+            } else {
+                let variance_stash = format!("layer_norm_variance_stash_{}", variance_id);
+                self.add_binary_node(
+                    "Sub",
+                    variance_plus_epsilon,
+                    epsilon_name,
+                    variance_stash.clone(),
+                );
+                self.add_cast_node(
+                    variance_stash,
+                    self.get_tensor_name(variance_id)?,
+                    variance_dtype,
+                );
+            }
         }
 
         Ok(())

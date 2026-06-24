@@ -777,6 +777,10 @@ impl GraphOptimizer {
             || (target_opset >= 13 && dtype == dt::BFLOAT16)
     }
 
+    fn is_floating_dtype(dtype: i32) -> bool {
+        matches!(dtype, dt::FLOAT | dt::FLOAT16 | dt::DOUBLE | dt::BFLOAT16)
+    }
+
     fn static_axes(
         graph: &onnx::GraphProto,
         facts: &GraphFacts,
@@ -1177,6 +1181,18 @@ impl GraphOptimizer {
         values.len() == 1 && (values[0] - expected).abs() == 0.0
     }
 
+    /// True when every element of the constant is negative zero (`-0.0`). Adding
+    /// `-0.0` is the genuine IEEE-754 additive identity, so such a node can be
+    /// folded for floating types while `x + (+0.0)` cannot.
+    fn const_is_negative_zero(tensor: &onnx::TensorProto) -> bool {
+        match Self::tensor_to_f64(tensor) {
+            Some(values) => {
+                !values.is_empty() && values.iter().all(|&v| v == 0.0 && v.is_sign_negative())
+            }
+            None => false,
+        }
+    }
+
     /// A single-element identity const (all dims == 1) is only safe to drop when
     /// broadcasting it into the passthrough does not raise the output rank, i.e.
     /// `rank(const) <= rank(passthrough)`. A rank-0 scalar never expands; for any
@@ -1224,6 +1240,17 @@ impl GraphOptimizer {
                 let Some(value) = Self::const_value(graph, &facts, const_name) else {
                     continue;
                 };
+                // IEEE-754's additive identity is -0.0, not +0.0: `x + (-0.0) == x` for
+                // every x, but `x + (+0.0)` flushes a -0.0 operand to +0.0 (a downstream
+                // `Reciprocal` would then turn -inf into +inf). So for floating types only
+                // fold the additive identity when the constant is negative zero; integer
+                // Add and `x * 1` (all dtypes) are unaffected.
+                if node.op_type == "Add"
+                    && Self::is_floating_dtype(value.tensor.data_type)
+                    && !Self::const_is_negative_zero(&value.tensor)
+                {
+                    continue;
+                }
                 if Self::const_is_scalar_or_single_value(&value.tensor, expected)
                     && Self::identity_preserves_shape(
                         graph,
@@ -2130,7 +2157,7 @@ mod tests {
             .attribute
             .push(helper::attr_ints("perm", &[0, 1]));
         let mut graph = onnx::GraphProto {
-            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            initializer: vec![i64_tensor_with_dims("zero", vec![], &[0])],
             node: vec![
                 t1,
                 t2,
@@ -2153,7 +2180,7 @@ mod tests {
     fn optimizer_resolves_chained_identity_rewrites() {
         let mut graph = onnx::GraphProto {
             initializer: vec![
-                f32_tensor("zero", vec![], &[0.0]),
+                i64_tensor_with_dims("zero", vec![], &[0]),
                 f32_tensor("one", vec![], &[1.0]),
             ],
             node: vec![
@@ -2187,7 +2214,7 @@ mod tests {
             ..Default::default()
         });
         let mut graph = onnx::GraphProto {
-            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            initializer: vec![i64_tensor_with_dims("zero", vec![], &[0])],
             node: vec![
                 node("Add", &["x", "zero"], &["a"]),
                 node("Add", &["a", "zero"], &["b"]),
@@ -2276,7 +2303,7 @@ mod tests {
             ..Default::default()
         });
         let mut graph = onnx::GraphProto {
-            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            initializer: vec![i64_tensor_with_dims("zero", vec![], &[0])],
             node: vec![node("Add", &["x", "zero"], &["add_out"]), if_node],
             output: vec![graph_output("if_out")],
             ..Default::default()
@@ -2292,7 +2319,7 @@ mod tests {
     #[test]
     fn optimizer_does_not_use_parent_shapes_inside_subgraphs() {
         let then_graph = onnx::GraphProto {
-            initializer: vec![f32_tensor("zero", vec![1], &[0.0])],
+            initializer: vec![i64_tensor("zero", &[0])],
             input: vec![graph_output("x")],
             node: vec![
                 node("Add", &["x", "zero"], &["hidden"]),
@@ -2534,7 +2561,7 @@ mod tests {
         // x is rank-1 [4]; a numel-1 const of rank 2 [1, 1] broadcasts the Add
         // output to rank-2 [1, 4], so the Add must not be eliminated.
         let mut graph = onnx::GraphProto {
-            initializer: vec![f32_tensor("zero", vec![1, 1], &[0.0])],
+            initializer: vec![i64_tensor_with_dims("zero", vec![1, 1], &[0])],
             input: vec![value_info("x", &[4])],
             node: vec![
                 node("Add", &["x", "zero"], &["out"]),
@@ -2547,6 +2574,76 @@ mod tests {
         GraphOptimizer::optimize_for_test(&mut graph);
 
         assert!(graph.node.iter().any(|node| node.op_type == "Add"));
+    }
+
+    #[test]
+    fn optimizer_keeps_float_add_positive_zero_to_preserve_signed_zero() {
+        // `x + (+0.0)` is not semantics-preserving for floats: `-0.0 + 0.0` is `+0.0`,
+        // but forwarding `x` keeps `-0.0`, which a downstream Reciprocal turns into
+        // `-inf`. The float Add-positive-zero identity must be left intact.
+        let mut graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            input: vec![value_info("x", &[4])],
+            node: vec![
+                node("Add", &["x", "zero"], &["out"]),
+                node("Reciprocal", &["out"], &["final"]),
+            ],
+            output: vec![graph_output("final")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert!(
+            graph
+                .node
+                .iter()
+                .any(|node| node.op_type == "Add" && node.output == vec!["out"])
+        );
+    }
+
+    #[test]
+    fn optimizer_eliminates_float_add_negative_zero() {
+        // `-0.0` is the genuine IEEE-754 additive identity: `x + (-0.0) == x` for all
+        // x, so folding it away is always safe even for floating types.
+        let mut graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("neg_zero", vec![], &[-0.0])],
+            input: vec![value_info("x", &[4])],
+            node: vec![
+                node("Add", &["x", "neg_zero"], &["out"]),
+                node("Reciprocal", &["out"], &["final"]),
+            ],
+            output: vec![graph_output("final")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert_eq!(graph.node.len(), 1);
+        assert_eq!(graph.node[0].op_type, "Reciprocal");
+        assert_eq!(graph.node[0].input, vec!["x"]);
+    }
+
+    #[test]
+    fn optimizer_still_eliminates_float_mul_one() {
+        // The signed-zero guard only applies to Add; `x * 1.0` stays foldable for
+        // floating types.
+        let mut graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("one", vec![], &[1.0])],
+            input: vec![value_info("x", &[4])],
+            node: vec![
+                node("Mul", &["x", "one"], &["out"]),
+                node("Relu", &["out"], &["final"]),
+            ],
+            output: vec![graph_output("final")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert_eq!(graph.node.len(), 1);
+        assert_eq!(graph.node[0].op_type, "Relu");
+        assert_eq!(graph.node[0].input, vec!["x"]);
     }
 
     #[test]

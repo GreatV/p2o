@@ -20,7 +20,9 @@ impl Converter {
         if self.scalar_reduce_passthrough(inputs[0], out_id)? {
             return Ok(());
         }
-        let axes_input_id = inputs.get(1).copied();
+        // Paddle uses tensor id 0 as the "absent input" placeholder; treat an omitted
+        // axes input as reduce-all rather than as a dynamic-axes tensor.
+        let axes_input_id = inputs.get(1).copied().filter(|&id| id != 0);
         let axes = axes_input_id
             .and_then(|axis_id| self.state.constants.get(&axis_id))
             .map(|values| values.iter().map(|&value| value as i64).collect::<Vec<_>>());
@@ -96,7 +98,9 @@ impl Converter {
             output: vec![self.get_tensor_name(out_id)?],
             ..Default::default()
         };
-        if inputs.len() > 1 {
+        // Tensor id 0 is Paddle's absent-input placeholder; skip it so an omitted axes
+        // input reduces over all dimensions instead of referencing a bogus tensor.
+        if inputs.len() > 1 && inputs[1] != 0 {
             node.input.push(self.get_tensor_name(inputs[1])?);
         }
         node.attribute.push(helper::attr_int(
