@@ -275,6 +275,53 @@ fn test_layer_norm_emits_onnx_node_at_opset_17() {
 }
 
 #[test]
+fn test_layer_norm_reconstructs_variance_output() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+    converter
+        .state
+        .tensor_types
+        .insert(10, "0.t_f32".to_string());
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "A": [
+            { "AT": { "#": "0.a_f32", "D": 0.001 }, "N": "epsilon" },
+            { "AT": { "#": "0.a_i32", "D": 2 }, "N": "begin_norm_axis" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 },
+            { "%": 14 },
+            { "%": 15 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap();
+
+    assert_eq!(converter.onnx_graph.node.len(), 4);
+    assert_eq!(converter.onnx_graph.node[0].op_type, "LayerNormalization");
+    assert_eq!(
+        converter.onnx_graph.node[0].output,
+        vec!["tensor_13", "tensor_14", "layer_norm_inv_stddev_15"]
+    );
+    assert_eq!(converter.onnx_graph.node[1].op_type, "Mul");
+    assert_eq!(converter.onnx_graph.node[2].op_type, "Reciprocal");
+    assert_eq!(converter.onnx_graph.node[3].op_type, "Sub");
+    assert_eq!(converter.onnx_graph.node[3].output, vec!["tensor_15"]);
+    assert_eq!(
+        scalar_f32_initializer(&converter, "layer_norm_epsilon_15"),
+        0.001
+    );
+}
+
+#[test]
 fn test_greater_equal_lowers_before_opset_12() {
     let mut converter = Converter::new();
     converter.set_target_opset(11);

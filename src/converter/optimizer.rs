@@ -16,6 +16,7 @@ pub enum OptimizationLevel {
 #[derive(Clone, Debug)]
 pub(crate) struct OptimizerOptions {
     pub(crate) level: OptimizationLevel,
+    pub(crate) target_opset: i64,
     pub(crate) max_iterations: usize,
     pub(crate) passes: OptimizerPasses,
     pub(crate) shapes: HashMap<String, Vec<i64>>,
@@ -25,6 +26,7 @@ impl Default for OptimizerOptions {
     fn default() -> Self {
         Self {
             level: OptimizationLevel::Basic,
+            target_opset: crate::converter::DEFAULT_OPSET,
             max_iterations: 8,
             passes: OptimizerPasses::default(),
             shapes: HashMap::new(),
@@ -173,13 +175,22 @@ impl GraphOptimizer {
             ..Default::default()
         };
 
+        let subgraph_options = Self::subgraph_options(options);
         for node in &mut graph.node {
             for attr in &mut node.attribute {
                 if let Some(subgraph) = attr.g.as_mut() {
-                    report.merge(Self::optimize_graph_checked(subgraph, options, depth + 1)?);
+                    report.merge(Self::optimize_graph_checked(
+                        subgraph,
+                        &subgraph_options,
+                        depth + 1,
+                    )?);
                 }
                 for subgraph in &mut attr.graphs {
-                    report.merge(Self::optimize_graph_checked(subgraph, options, depth + 1)?);
+                    report.merge(Self::optimize_graph_checked(
+                        subgraph,
+                        &subgraph_options,
+                        depth + 1,
+                    )?);
                 }
             }
         }
@@ -290,6 +301,12 @@ impl GraphOptimizer {
         report.nodes_after += graph.node.len();
         report.initializers_after += graph.initializer.len();
         Ok(report)
+    }
+
+    fn subgraph_options(options: &OptimizerOptions) -> OptimizerOptions {
+        let mut child = options.clone();
+        child.shapes.clear();
+        child
     }
 
     fn run_pass(
@@ -508,15 +525,33 @@ impl GraphOptimizer {
         Self::rewrite_is_safe_in_subgraphs(graph, from, to)
     }
 
-    fn apply_rewrites_recursive(graph: &mut onnx::GraphProto, rewrites: &[(String, String)]) {
+    fn apply_rewrites_recursive(
+        graph: &mut onnx::GraphProto,
+        rewrites: &[(String, String)],
+    ) -> HashSet<String> {
         let rewrite_map = rewrites
             .iter()
             .cloned()
             .collect::<HashMap<String, String>>();
+        let mut applied = HashSet::new();
         for (from, to) in rewrites {
             let resolved = Self::resolve_rewrite_target(to, &rewrite_map);
-            if from != &resolved {
+            if from != &resolved && Self::rewrite_is_safe(graph, from, &resolved) {
                 Self::replace_inputs_recursive(graph, from, &resolved);
+                applied.insert(from.clone());
+            }
+        }
+        applied
+    }
+
+    fn mark_applied_rewrite_removals(
+        remove: &mut [bool],
+        rewrite_removals: &[(usize, String)],
+        applied_rewrites: &HashSet<String>,
+    ) {
+        for (idx, output) in rewrite_removals {
+            if applied_rewrites.contains(output) {
+                remove[*idx] = true;
             }
         }
     }
@@ -737,8 +772,9 @@ impl GraphOptimizer {
             .or_else(|| Self::const_value(graph, facts, name).map(|value| value.tensor.data_type))
     }
 
-    fn gemm_supported_dtype(dtype: i32) -> bool {
-        matches!(dtype, dt::FLOAT16 | dt::FLOAT | dt::DOUBLE | dt::BFLOAT16)
+    fn gemm_supported_dtype(dtype: i32, target_opset: i64) -> bool {
+        matches!(dtype, dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)
+            || (target_opset >= 13 && dtype == dt::BFLOAT16)
     }
 
     fn static_axes(
@@ -805,6 +841,7 @@ impl GraphOptimizer {
         let facts = Self::analyze(graph, options);
         let mut remove = vec![false; graph.node.len()];
         let mut rewrites = Vec::new();
+        let mut rewrite_removals = Vec::new();
         let mut updates = Vec::new();
         let mut new_initializers = Vec::new();
 
@@ -843,13 +880,14 @@ impl GraphOptimizer {
                 }
                 updates.push(value);
                 rewrites.push((output.clone(), input_name.clone()));
+                rewrite_removals.push((idx, output.clone()));
             } else if matches!(value.location, ConstLocation::Initializer(_)) {
                 value.tensor.name = output.clone();
                 new_initializers.push(value.tensor);
+                remove[idx] = true;
             } else {
                 continue;
             }
-            remove[idx] = true;
         }
 
         // Shared-initializer clones also remove a Reshape node but are not in
@@ -860,9 +898,10 @@ impl GraphOptimizer {
             Self::set_const_value(graph, update);
         }
         graph.initializer.extend(new_initializers);
-        Self::apply_rewrites_recursive(graph, &rewrites);
+        let applied = Self::apply_rewrites_recursive(graph, &rewrites);
+        Self::mark_applied_rewrite_removals(&mut remove, &rewrite_removals, &applied);
         Self::remove_nodes(graph, &remove);
-        Ok(rewrites.len() + cloned)
+        Ok(applied.len() + cloned)
     }
 
     fn unsqueeze_dims(input_dims: &[i64], axes: &[i64]) -> Option<Vec<i64>> {
@@ -898,6 +937,7 @@ impl GraphOptimizer {
         let facts = Self::analyze(graph, options);
         let mut remove = vec![false; graph.node.len()];
         let mut rewrites = Vec::new();
+        let mut rewrite_removals = Vec::new();
         let mut updates = Vec::new();
 
         for (idx, node) in graph.node.iter().enumerate() {
@@ -927,15 +967,16 @@ impl GraphOptimizer {
             value.tensor.dims = new_dims;
             updates.push(value);
             rewrites.push((output.clone(), input_name.clone()));
-            remove[idx] = true;
+            rewrite_removals.push((idx, output.clone()));
         }
 
         for update in updates {
             Self::set_const_value(graph, update);
         }
-        Self::apply_rewrites_recursive(graph, &rewrites);
+        let applied = Self::apply_rewrites_recursive(graph, &rewrites);
+        Self::mark_applied_rewrite_removals(&mut remove, &rewrite_removals, &applied);
         Self::remove_nodes(graph, &remove);
-        Ok(rewrites.len())
+        Ok(applied.len())
     }
 
     fn tensor_to_f64(tensor: &onnx::TensorProto) -> Option<Vec<f64>> {
@@ -1068,6 +1109,7 @@ impl GraphOptimizer {
         let facts = Self::analyze(graph, options);
         let mut remove = vec![false; graph.node.len()];
         let mut rewrites = Vec::new();
+        let mut rewrite_removals = Vec::new();
         let mut updates = Vec::new();
 
         for (idx, node) in graph.node.iter().enumerate() {
@@ -1108,15 +1150,16 @@ impl GraphOptimizer {
             }
             updates.push(value);
             rewrites.push((output.clone(), input_name.clone()));
-            remove[idx] = true;
+            rewrite_removals.push((idx, output.clone()));
         }
 
         for update in updates {
             Self::set_const_value(graph, update);
         }
-        Self::apply_rewrites_recursive(graph, &rewrites);
+        let applied = Self::apply_rewrites_recursive(graph, &rewrites);
+        Self::mark_applied_rewrite_removals(&mut remove, &rewrite_removals, &applied);
         Self::remove_nodes(graph, &remove);
-        Ok(rewrites.len())
+        Ok(applied.len())
     }
 
     fn const_is_scalar_or_single_value(tensor: &onnx::TensorProto, expected: f64) -> bool {
@@ -1161,6 +1204,7 @@ impl GraphOptimizer {
         let facts = Self::analyze(graph, options);
         let mut remove = vec![false; graph.node.len()];
         let mut rewrites = Vec::new();
+        let mut rewrite_removals = Vec::new();
 
         for (idx, node) in graph.node.iter().enumerate() {
             if !matches!(node.op_type.as_str(), "Add" | "Mul")
@@ -1190,15 +1234,16 @@ impl GraphOptimizer {
                     && Self::rewrite_is_safe(graph, output, passthrough_name)
                 {
                     rewrites.push((output.clone(), passthrough_name.clone()));
-                    remove[idx] = true;
+                    rewrite_removals.push((idx, output.clone()));
                     break;
                 }
             }
         }
 
-        Self::apply_rewrites_recursive(graph, &rewrites);
+        let applied = Self::apply_rewrites_recursive(graph, &rewrites);
+        Self::mark_applied_rewrite_removals(&mut remove, &rewrite_removals, &applied);
         Self::remove_nodes(graph, &remove);
-        Ok(rewrites.len())
+        Ok(applied.len())
     }
 
     fn transpose_perm(node: &onnx::NodeProto) -> Option<Vec<i64>> {
@@ -1218,7 +1263,7 @@ impl GraphOptimizer {
         let facts = Self::analyze(graph, options);
         let mut remove = vec![false; graph.node.len()];
         let mut rewrites = Vec::new();
-        let mut changes = 0;
+        let mut rewrite_removals = Vec::new();
 
         for (idx, node) in graph.node.iter().enumerate() {
             if node.op_type != "Transpose" || node.input.len() != 1 || node.output.len() != 1 {
@@ -1233,13 +1278,14 @@ impl GraphOptimizer {
                 && Self::rewrite_is_safe(graph, output, &node.input[0])
             {
                 rewrites.push((output.clone(), node.input[0].clone()));
-                remove[idx] = true;
-                changes += 1;
+                rewrite_removals.push((idx, output.clone()));
             }
         }
 
-        Self::apply_rewrites_recursive(graph, &rewrites);
+        let applied = Self::apply_rewrites_recursive(graph, &rewrites);
+        Self::mark_applied_rewrite_removals(&mut remove, &rewrite_removals, &applied);
         Self::remove_nodes(graph, &remove);
+        let mut changes = applied.len();
         if changes > 0 {
             return Ok(changes);
         }
@@ -1760,7 +1806,7 @@ impl GraphOptimizer {
             let Some(rhs_dtype) = Self::tensor_dtype(graph, &facts, &matmul_inputs[1]) else {
                 continue;
             };
-            if !Self::gemm_supported_dtype(lhs_dtype)
+            if !Self::gemm_supported_dtype(lhs_dtype, options.target_opset)
                 || lhs_dtype != rhs_dtype
                 || bias.tensor.data_type != lhs_dtype
             {
@@ -1818,6 +1864,7 @@ impl super::Converter {
         }
         OptimizerOptions {
             level: self.optimization_level,
+            target_opset: self.target_opset,
             shapes,
             ..Default::default()
         }
@@ -1867,6 +1914,17 @@ mod tests {
             tensor.raw_data.extend_from_slice(&value.to_le_bytes());
         }
         tensor
+    }
+
+    fn bf16_tensor(name: &str, dims: Vec<i64>) -> onnx::TensorProto {
+        let elements = dims.iter().product::<i64>().max(0) as usize;
+        onnx::TensorProto {
+            name: name.to_string(),
+            dims,
+            data_type: dt::BFLOAT16,
+            raw_data: vec![0; elements * 2],
+            ..Default::default()
+        }
     }
 
     fn node(op_type: &str, inputs: &[&str], outputs: &[&str]) -> onnx::NodeProto {
@@ -2115,6 +2173,51 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_keeps_producer_when_resolved_rewrite_is_unsafe_for_subgraph() {
+        let then_graph = onnx::GraphProto {
+            input: vec![graph_output("x")],
+            node: vec![node("Identity", &["b"], &["then_out"])],
+            output: vec![graph_output("then_out")],
+            ..Default::default()
+        };
+        let mut if_node = node("If", &["cond"], &["if_out"]);
+        if_node.attribute.push(onnx::AttributeProto {
+            name: "then_branch".to_string(),
+            g: Some(then_graph),
+            ..Default::default()
+        });
+        let mut graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            node: vec![
+                node("Add", &["x", "zero"], &["a"]),
+                node("Add", &["a", "zero"], &["b"]),
+                if_node,
+            ],
+            output: vec![graph_output("if_out")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert!(
+            graph
+                .node
+                .iter()
+                .any(|node| node.op_type == "Add" && node.output == vec!["b"])
+        );
+        let then_graph = graph
+            .node
+            .iter()
+            .find(|node| node.op_type == "If")
+            .unwrap()
+            .attribute[0]
+            .g
+            .as_ref()
+            .unwrap();
+        assert_eq!(then_graph.node[0].input, vec!["b"]);
+    }
+
+    #[test]
     fn optimizer_skips_transpose_pair_when_subgraph_shadows_replacement() {
         let mut t1 = node("Transpose", &["x"], &["t1"]);
         t1.attribute.push(helper::attr_ints("perm", &[1, 0]));
@@ -2184,6 +2287,43 @@ mod tests {
         assert_eq!(graph.node[0].op_type, "Add");
         let then_graph = graph.node[1].attribute[0].g.as_ref().unwrap();
         assert_eq!(then_graph.node[0].input, vec!["add_out"]);
+    }
+
+    #[test]
+    fn optimizer_does_not_use_parent_shapes_inside_subgraphs() {
+        let then_graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("zero", vec![1], &[0.0])],
+            input: vec![graph_output("x")],
+            node: vec![
+                node("Add", &["x", "zero"], &["hidden"]),
+                node("Relu", &["hidden"], &["then_out"]),
+            ],
+            output: vec![graph_output("then_out")],
+            ..Default::default()
+        };
+        let mut if_node = node("If", &["cond"], &["if_out"]);
+        if_node.attribute.push(onnx::AttributeProto {
+            name: "then_branch".to_string(),
+            g: Some(then_graph),
+            ..Default::default()
+        });
+        let mut graph = onnx::GraphProto {
+            node: vec![if_node],
+            output: vec![graph_output("if_out")],
+            ..Default::default()
+        };
+        let mut options = super::OptimizerOptions::default();
+        options.shapes.insert("x".to_string(), vec![1]);
+
+        GraphOptimizer::optimize_graph(&mut graph, &options).expect("optimizer failed");
+
+        let then_graph = graph.node[0].attribute[0].g.as_ref().unwrap();
+        assert!(
+            then_graph
+                .node
+                .iter()
+                .any(|node| node.op_type == "Add" && node.output == vec!["hidden"])
+        );
     }
 
     #[test]
@@ -2312,6 +2452,59 @@ mod tests {
         assert_eq!(graph.node.len(), 2);
         assert_eq!(graph.node[0].op_type, "MatMul");
         assert_eq!(graph.node[1].op_type, "Add");
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_bfloat16_matmul_add_to_gemm_before_opset_13() {
+        let mut graph = onnx::GraphProto {
+            initializer: vec![bf16_tensor("bias", vec![3])],
+            input: vec![
+                value_info_with_dtype("x", &[2, 4], dt::BFLOAT16),
+                value_info_with_dtype("w", &[4, 3], dt::BFLOAT16),
+            ],
+            node: vec![
+                node("MatMul", &["x", "w"], &["mm"]),
+                node("Add", &["mm", "bias"], &["out"]),
+            ],
+            output: vec![graph_output("out")],
+            ..Default::default()
+        };
+        let options = super::OptimizerOptions {
+            target_opset: 12,
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_graph(&mut graph, &options).expect("optimizer failed");
+
+        assert_eq!(graph.node.len(), 2);
+        assert_eq!(graph.node[0].op_type, "MatMul");
+        assert_eq!(graph.node[1].op_type, "Add");
+    }
+
+    #[test]
+    fn optimizer_fuses_bfloat16_matmul_add_to_gemm_at_opset_13() {
+        let mut graph = onnx::GraphProto {
+            initializer: vec![bf16_tensor("bias", vec![3])],
+            input: vec![
+                value_info_with_dtype("x", &[2, 4], dt::BFLOAT16),
+                value_info_with_dtype("w", &[4, 3], dt::BFLOAT16),
+            ],
+            node: vec![
+                node("MatMul", &["x", "w"], &["mm"]),
+                node("Add", &["mm", "bias"], &["out"]),
+            ],
+            output: vec![graph_output("out")],
+            ..Default::default()
+        };
+        let options = super::OptimizerOptions {
+            target_opset: 13,
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_graph(&mut graph, &options).expect("optimizer failed");
+
+        assert_eq!(graph.node.len(), 1);
+        assert_eq!(graph.node[0].op_type, "Gemm");
     }
 
     #[test]

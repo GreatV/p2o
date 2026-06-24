@@ -433,7 +433,98 @@ impl super::super::Converter {
 
     pub fn op_layer_norm(&mut self, op: &Value) -> anyhow::Result<()> {
         self.require_opset(17, "layer_norm")?;
-        self.convert_generic_op("layer_norm", op)
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 3 {
+            bail!("layer_norm missing inputs");
+        }
+        let output_ids = Self::layer_norm_output_ids(op)?;
+        if output_ids.is_empty() {
+            bail!("layer_norm missing outputs");
+        }
+        if output_ids.len() > 3 {
+            bail!(
+                "layer_norm supports at most 3 outputs, got {}",
+                output_ids.len()
+            );
+        }
+
+        let mut output_names = vec![self.get_tensor_name(output_ids[0])?];
+        if output_ids.len() >= 2 {
+            output_names.push(self.get_tensor_name(output_ids[1])?);
+        }
+        let variance_output = if output_ids.len() == 3 {
+            let variance_id = output_ids[2];
+            let inv_stddev = format!("layer_norm_inv_stddev_{}", variance_id);
+            output_names.push(inv_stddev.clone());
+            Some((variance_id, inv_stddev))
+        } else {
+            None
+        };
+
+        let mut node = onnx::NodeProto {
+            op_type: "LayerNormalization".to_string(),
+            input: vec![
+                self.get_tensor_name(inputs[0])?,
+                self.get_tensor_name(inputs[1])?,
+                self.get_tensor_name(inputs[2])?,
+            ],
+            output: output_names,
+            ..Default::default()
+        };
+        if let Some(attrs) = op.get("A") {
+            node.attribute = self.extract_attributes("layer_norm", attrs);
+        }
+        self.onnx_graph.node.push(node);
+
+        if let Some((variance_id, inv_stddev)) = variance_output {
+            let epsilon = helper::attr_f64(op, "epsilon").unwrap_or(1.0e-5);
+            let data_type = match self.maybe_onnx_dtype_for_tensor_id(inputs[0])? {
+                Some(dtype @ (dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)) => dtype,
+                _ => dt::FLOAT,
+            };
+            let inv_stddev_sq = format!("layer_norm_inv_stddev_sq_{}", variance_id);
+            let variance_plus_epsilon = format!("layer_norm_variance_plus_epsilon_{}", variance_id);
+            let epsilon_name = format!("layer_norm_epsilon_{}", variance_id);
+            self.push_numeric_initializer(epsilon_name.clone(), vec![], data_type, &[epsilon])?;
+            self.add_binary_node("Mul", inv_stddev.clone(), inv_stddev, inv_stddev_sq.clone());
+            self.onnx_graph.node.push(onnx::NodeProto {
+                op_type: "Reciprocal".to_string(),
+                input: vec![inv_stddev_sq],
+                output: vec![variance_plus_epsilon.clone()],
+                ..Default::default()
+            });
+            self.add_binary_node(
+                "Sub",
+                variance_plus_epsilon,
+                epsilon_name,
+                self.get_tensor_name(variance_id)?,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn layer_norm_output_ids(op: &Value) -> anyhow::Result<Vec<i64>> {
+        let Some(outputs) = op.get("O") else {
+            bail!("Missing output ID in op: {:?}", op);
+        };
+        if let Some(arr) = outputs.as_array() {
+            return arr
+                .iter()
+                .map(|output| {
+                    output
+                        .get("%")
+                        .and_then(|id| id.as_i64())
+                        .ok_or_else(|| anyhow::anyhow!("Missing output ID in op: {:?}", op))
+                })
+                .collect();
+        }
+        if let Some(obj) = outputs.as_object()
+            && let Some(id) = obj.get("%").and_then(|id| id.as_i64())
+        {
+            return Ok(vec![id]);
+        }
+        bail!("Missing output ID in op: {:?}", op)
     }
 
     fn op_binary_compare(
