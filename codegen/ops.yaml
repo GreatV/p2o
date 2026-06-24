@@ -64,6 +64,9 @@ pass2_dispatch:
   - op: "1.silu"
     kind: simple
     method: op_silu
+  - op: "1.silu_"
+    kind: simple
+    method: op_silu
   - op: "1.hardswish"
     kind: simple
     method: op_hardswish
@@ -130,12 +133,36 @@ pass2_dispatch:
   - op: "1.sum"
     kind: simple
     method: op_reduce_sum
+  - op: "1.prod"
+    kind: simple
+    method: op_reduce_prod
   - op: "1.topk"
     kind: simple
     method: op_topk
   - op: "1.argmax"
     kind: simple
     method: op_argmax
+  - op: "1.softplus"
+    kind: simple
+    method: op_softplus
+  - op: "1.relu6"
+    kind: simple
+    method: op_relu6
+  - op: "1.thresholded_relu"
+    kind: simple
+    method: op_thresholded_relu
+  - op: "1.softshrink"
+    kind: simple
+    method: op_softshrink
+  - op: "1.square"
+    kind: simple
+    method: op_square
+  - op: "1.log1p"
+    kind: simple
+    method: op_log1p
+  - op: "1.logsigmoid"
+    kind: simple
+    method: op_logsigmoid
   - op: "1.any"
     kind: arg
     method: op_any_all
@@ -365,3 +392,63 @@ op_type_map:
     onnx: "Less"
   - paddle: ["sqrt"]
     onnx: "Sqrt"
+  - paddle: ["exp"]
+    onnx: "Exp"
+  - paddle: ["erf"]
+    onnx: "Erf"
+  - paddle: ["sign"]
+    onnx: "Sign"
+  - paddle: ["round"]
+    onnx: "Round"
+  - paddle: ["reciprocal"]
+    onnx: "Reciprocal"
+  - paddle: ["sinh"]
+    onnx: "Sinh"
+  - paddle: ["cosh"]
+    onnx: "Cosh"
+  - paddle: ["tan"]
+    onnx: "Tan"
+  - paddle: ["acos"]
+    onnx: "Acos"
+  - paddle: ["asin"]
+    onnx: "Asin"
+  - paddle: ["atan"]
+    onnx: "Atan"
+  - paddle: ["gather"]
+    onnx: "Gather"
+  - paddle: ["one_hot"]
+    onnx: "OneHot"
+  - paddle: ["cumsum"]
+    onnx: "CumSum"
+  - paddle: ["argsort"]
+    onnx: "ArgSort"
+  - paddle: ["softsign"]
+    onnx: "Softsign"
+  - paddle: ["elu"]
+    onnx: "Elu"
+  - paddle: ["log_softmax"]
+    onnx: "LogSoftmax"
+  - paddle: ["silu"]
+    onnx: "Silu"
+  - paddle: ["max"]
+    onnx: "ReduceMax"
+  - paddle: ["min"]
+    onnx: "ReduceMin"
+  - paddle: ["elementwise_max"]
+    onnx: "Max"
+  - paddle: ["maximum"]
+    onnx: "Max"
+  - paddle: ["elementwise_min", "minimum"]
+    onnx: "Min"
+  - paddle: ["sum"]
+    onnx: "ReduceSum"
+  - paddle: ["cast"]
+    onnx: "Cast"
+  - paddle: ["index_select"]
+    onnx: "Gather"
+  - paddle: ["take_along_axis"]
+    onnx: "GatherElements"
+  - paddle: ["isinf"]
+    onnx: "IsInf"
+  - paddle: ["isnan"]
+    onnx: "IsNaN"
