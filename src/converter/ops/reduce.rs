@@ -20,22 +20,50 @@ impl Converter {
         if self.scalar_reduce_passthrough(inputs[0], out_id)? {
             return Ok(());
         }
-        let axes = inputs
-            .get(1)
-            .and_then(|axis_id| self.state.constants.get(axis_id))
+        // Paddle uses tensor id 0 as the "absent input" placeholder; treat an omitted
+        // axes input as reduce-all rather than as a dynamic-axes tensor.
+        let axes_input_id = inputs.get(1).copied().filter(|&id| id != 0);
+        let axes = axes_input_id
+            .and_then(|axis_id| self.state.constants.get(&axis_id))
             .map(|values| values.iter().map(|&value| value as i64).collect::<Vec<_>>());
-        self.add_reduce_node(
-            onnx_op,
-            self.get_tensor_name(inputs[0])?,
-            self.get_tensor_name(out_id)?,
-            axes.as_deref(),
-            i64::from(
-                helper::attr(op, "keepdim")
-                    .and_then(|d| d.as_bool())
-                    .unwrap_or(true),
-            ),
-            &format!("{}_{}", node_prefix, out_id),
+        let keepdims = i64::from(
+            helper::attr(op, "keepdim")
+                .and_then(|d| d.as_bool())
+                .unwrap_or(true),
         );
+        if let Some(axis_id) = axes_input_id
+            && axes.is_none()
+        {
+            if self.target_opset < 18 {
+                bail!("{onnx_op} with dynamic axes requires opset >= 18");
+            }
+            let mut axis_name = self.get_tensor_name(axis_id)?;
+            if !matches!(
+                self.state.tensor_types.get(&axis_id).map(String::as_str),
+                Some(helper::paddle_tt::I64)
+            ) {
+                let cast_output = format!("{}_axes_i64_{}", node_prefix, out_id);
+                self.add_cast_node(axis_name, cast_output.clone(), dt::INT64);
+                axis_name = cast_output;
+            }
+            let mut node = onnx::NodeProto {
+                op_type: onnx_op.to_string(),
+                input: vec![self.get_tensor_name(inputs[0])?, axis_name],
+                output: vec![self.get_tensor_name(out_id)?],
+                ..Default::default()
+            };
+            node.attribute.push(helper::attr_int("keepdims", keepdims));
+            self.onnx_graph.node.push(node);
+        } else {
+            self.add_reduce_node(
+                onnx_op,
+                self.get_tensor_name(inputs[0])?,
+                self.get_tensor_name(out_id)?,
+                axes.as_deref(),
+                keepdims,
+                &format!("{}_{}", node_prefix, out_id),
+            );
+        }
         Ok(())
     }
 
@@ -70,7 +98,9 @@ impl Converter {
             output: vec![self.get_tensor_name(out_id)?],
             ..Default::default()
         };
-        if inputs.len() > 1 {
+        // Tensor id 0 is Paddle's absent-input placeholder; skip it so an omitted axes
+        // input reduces over all dimensions instead of referencing a bogus tensor.
+        if inputs.len() > 1 && inputs[1] != 0 {
             node.input.push(self.get_tensor_name(inputs[1])?);
         }
         node.attribute.push(helper::attr_int(

@@ -7,6 +7,7 @@ import json
 import shutil
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -15,15 +16,32 @@ DEFAULT_BASE_URL = (
     "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0"
 )
 REQUIRED_FILES = ("inference.json", "inference.pdiparams")
+OPTIONAL_FILES = ("inference.yml",)
+# Bound every network read so a hung connection can't stall CI indefinitely.
+DOWNLOAD_TIMEOUT = 30
 
 
-def load_manifest(manifest_path: Path) -> list[tuple[str, Path]]:
+class ModelDownload:
+    def __init__(
+        self,
+        name: str,
+        model_dir: Path,
+        hf_repo: str | None = None,
+        hf_revision: str = "main",
+    ):
+        self.name = name
+        self.model_dir = model_dir
+        self.hf_repo = hf_repo
+        self.hf_revision = hf_revision
+
+
+def load_manifest(manifest_path: Path) -> list[ModelDownload]:
     payload = json.loads(manifest_path.read_text())
     model_items = payload.get("models")
     if not isinstance(model_items, list) or not model_items:
         raise ValueError(f"Manifest {manifest_path} must contain a non-empty 'models' list")
 
-    models: list[tuple[str, Path]] = []
+    models: list[ModelDownload] = []
     for item in model_items:
         if not isinstance(item, dict):
             raise ValueError(f"Manifest {manifest_path} contains a non-object model entry")
@@ -37,25 +55,31 @@ def load_manifest(manifest_path: Path) -> list[tuple[str, Path]]:
         model_dir = Path(model_dir_raw)
         if not model_dir.is_absolute():
             model_dir = (manifest_path.parent / model_dir).resolve()
-        models.append((name, model_dir))
+        hf_repo = item.get("hf_repo")
+        if hf_repo is not None and (not isinstance(hf_repo, str) or not hf_repo):
+            raise ValueError(f"Model '{name}' has invalid 'hf_repo'")
+        hf_revision = item.get("hf_revision", "main")
+        if not isinstance(hf_revision, str) or not hf_revision:
+            raise ValueError(f"Model '{name}' has invalid 'hf_revision'")
+        models.append(ModelDownload(name, model_dir, hf_repo, hf_revision))
     return models
 
 
 def select_models(
-    models: list[tuple[str, Path]],
+    models: list[ModelDownload],
     requested: list[str] | None,
-) -> list[tuple[str, Path]]:
+) -> list[ModelDownload]:
     if not requested:
         return models
 
-    available = {name for name, _ in models}
+    available = {model.name for model in models}
     unknown = [name for name in requested if name not in available]
     if unknown:
         raise ValueError(
             f"Unknown models: {', '.join(unknown)}. Available: {', '.join(sorted(available))}"
         )
     requested_set = set(requested)
-    return [(name, model_dir) for name, model_dir in models if name in requested_set]
+    return [model for model in models if model.name in requested_set]
 
 
 def has_required_files(model_dir: Path) -> bool:
@@ -63,7 +87,16 @@ def has_required_files(model_dir: Path) -> bool:
 
 
 def download_archive(url: str, archive_path: Path) -> None:
-    with urllib.request.urlopen(url) as response, archive_path.open("wb") as handle:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response, archive_path.open(
+        "wb"
+    ) as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def download_file(url: str, output_path: Path) -> None:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response, output_path.open(
+        "wb"
+    ) as handle:
         shutil.copyfileobj(response, handle)
 
 
@@ -122,24 +155,77 @@ def remove_existing(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def ensure_model(model_name: str, model_dir: Path, base_url: str, dry_run: bool) -> None:
-    archive_name = f"{model_dir.name}.tar"
+def hf_file_url(repo: str, filename: str, revision: str = "main") -> str:
+    quoted_repo = "/".join(urllib.parse.quote(part, safe="") for part in repo.split("/"))
+    quoted_revision = urllib.parse.quote(revision, safe="")
+    quoted_filename = urllib.parse.quote(filename, safe="/")
+    return f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
+
+
+def ensure_hf_model(model: ModelDownload, dry_run: bool) -> None:
+    if has_required_files(model.model_dir):
+        print(f"[skip] {model.name}: {model.model_dir}")
+        return
+
+    assert model.hf_repo is not None
+    if dry_run:
+        for filename in REQUIRED_FILES + OPTIONAL_FILES:
+            url = hf_file_url(model.hf_repo, filename, model.hf_revision)
+            print(f"[plan] {model.name}: {url} -> {model.model_dir / filename}")
+        return
+
+    print(f"[download] {model.name}: hf://{model.hf_repo}@{model.hf_revision}")
+    model.model_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".download_{model.model_dir.name}_",
+        dir=model.model_dir.parent,
+    ) as temp_dir_raw:
+        temp_dir = Path(temp_dir_raw)
+        download_dir = temp_dir / "model"
+        download_dir.mkdir()
+        for filename in REQUIRED_FILES:
+            download_file(
+                hf_file_url(model.hf_repo, filename, model.hf_revision),
+                download_dir / filename,
+            )
+        for filename in OPTIONAL_FILES:
+            try:
+                download_file(
+                    hf_file_url(model.hf_repo, filename, model.hf_revision),
+                    download_dir / filename,
+                )
+            except Exception as exc:
+                print(f"[warn] {model.name}: optional {filename} not downloaded ({exc})")
+
+        if model.model_dir.exists():
+            remove_existing(model.model_dir)
+        shutil.move(str(download_dir), str(model.model_dir))
+
+    if not has_required_files(model.model_dir):
+        raise FileNotFoundError(
+            f"Downloaded model '{model.name}' is missing required files under {model.model_dir}"
+        )
+    print(f"[ready] {model.name}: {model.model_dir}")
+
+
+def ensure_tar_model(model: ModelDownload, base_url: str, dry_run: bool) -> None:
+    archive_name = f"{model.model_dir.name}.tar"
     archive_url = f"{base_url.rstrip('/')}/{archive_name}"
 
-    if has_required_files(model_dir):
-        print(f"[skip] {model_name}: {model_dir}")
+    if has_required_files(model.model_dir):
+        print(f"[skip] {model.name}: {model.model_dir}")
         return
 
     if dry_run:
-        print(f"[plan] {model_name}: {archive_url} -> {model_dir}")
+        print(f"[plan] {model.name}: {archive_url} -> {model.model_dir}")
         return
 
-    print(f"[download] {model_name}: {archive_url}")
-    model_dir.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[download] {model.name}: {archive_url}")
+    model.model_dir.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
-        prefix=f".download_{model_dir.name}_",
-        dir=model_dir.parent,
+        prefix=f".download_{model.model_dir.name}_",
+        dir=model.model_dir.parent,
     ) as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
         archive_path = temp_dir / archive_name
@@ -148,17 +234,24 @@ def ensure_model(model_name: str, model_dir: Path, base_url: str, dry_run: bool)
 
         download_archive(archive_url, archive_path)
         safe_extract_all(archive_path, extract_dir)
-        extracted_root = find_extracted_root(extract_dir, model_dir.name)
+        extracted_root = find_extracted_root(extract_dir, model.model_dir.name)
 
-        if model_dir.exists():
-            remove_existing(model_dir)
-        shutil.move(str(extracted_root), str(model_dir))
+        if model.model_dir.exists():
+            remove_existing(model.model_dir)
+        shutil.move(str(extracted_root), str(model.model_dir))
 
-    if not has_required_files(model_dir):
+    if not has_required_files(model.model_dir):
         raise FileNotFoundError(
-            f"Downloaded model '{model_name}' is missing required files under {model_dir}"
+            f"Downloaded model '{model.name}' is missing required files under {model.model_dir}"
         )
-    print(f"[ready] {model_name}: {model_dir}")
+    print(f"[ready] {model.name}: {model.model_dir}")
+
+
+def ensure_model(model: ModelDownload, base_url: str, dry_run: bool) -> None:
+    if model.hf_repo is not None:
+        ensure_hf_model(model, dry_run)
+    else:
+        ensure_tar_model(model, base_url, dry_run)
 
 
 def parse_args() -> argparse.Namespace:
@@ -194,8 +287,8 @@ def main() -> int:
     manifest_path = args.manifest.resolve()
     models = load_manifest(manifest_path)
     selected = select_models(models, args.models)
-    for model_name, model_dir in selected:
-        ensure_model(model_name, model_dir, args.base_url, args.dry_run)
+    for model in selected:
+        ensure_model(model, args.base_url, args.dry_run)
     return 0
 
 

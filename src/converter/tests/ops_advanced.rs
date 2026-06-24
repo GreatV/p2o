@@ -240,6 +240,144 @@ fn test_reduce_max_on_scalar_becomes_identity() {
 }
 
 #[test]
+fn test_reduce_prod_with_dynamic_axes_requires_opset_18() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+
+    let op_json = json!({
+        "#": "1.prod",
+        "A": [
+            { "AT": { "D": true }, "N": "keepdim" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    let err = converter.process_pass2_op("1.prod", &op_json).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("ReduceProd with dynamic axes requires opset >= 18")
+    );
+}
+
+#[test]
+fn test_reduce_prod_with_dynamic_axes_uses_axes_input_at_opset_18() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(18);
+    converter
+        .state
+        .tensor_types
+        .insert(11, "0.t_i32".to_string());
+
+    let op_json = json!({
+        "#": "1.prod",
+        "A": [
+            { "AT": { "D": false }, "N": "keepdim" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter.process_pass2_op("1.prod", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 2);
+    assert_eq!(graph.node[0].op_type, "Cast");
+    assert_eq!(graph.node[0].input, vec!["tensor_11"]);
+    assert_eq!(graph.node[0].output, vec!["reduce_prod_axes_i64_12"]);
+    assert_eq!(graph.node[1].op_type, "ReduceProd");
+    assert_eq!(
+        graph.node[1].input,
+        vec!["tensor_10", "reduce_prod_axes_i64_12"]
+    );
+    assert_eq!(graph.node[1].output, vec!["tensor_12"]);
+    let keepdims = graph.node[1]
+        .attribute
+        .iter()
+        .find(|attr| attr.name == "keepdims")
+        .unwrap()
+        .i;
+    assert_eq!(keepdims, 0);
+}
+
+#[test]
+fn test_reduce_prod_with_placeholder_axes_reduces_all_dims() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+
+    // Paddle encodes an omitted axes input as tensor id 0; this must reduce over all
+    // dimensions rather than being treated as a dynamic-axes tensor (which would bail
+    // at opset < 18).
+    let op_json = json!({
+        "#": "1.prod",
+        "A": [
+            { "AT": { "D": true }, "N": "keepdim" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 0 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter.process_pass2_op("1.prod", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "ReduceProd");
+    assert_eq!(graph.node[0].input, vec!["tensor_10"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_12"]);
+    // No explicit axes attribute => reduce over every dimension.
+    assert!(
+        !graph.node[0]
+            .attribute
+            .iter()
+            .any(|attr| attr.name == "axes")
+    );
+}
+
+#[test]
+fn test_reduce_sum_with_placeholder_axes_reduces_all_dims() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+
+    let op_json = json!({
+        "#": "1.sum",
+        "A": [
+            { "AT": { "D": true }, "N": "keepdim" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 0 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter.process_pass2_op("1.sum", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "ReduceSum");
+    // The placeholder axes input is dropped, leaving only the data input.
+    assert_eq!(graph.node[0].input, vec!["tensor_10"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_12"]);
+}
+
+#[test]
 fn test_repeat_interleave_with_tensor_index_uses_dynamic_repeats_input() {
     let mut converter = Converter::new();
     converter.state.tensor_shapes.insert(10, vec![-1, 1]);

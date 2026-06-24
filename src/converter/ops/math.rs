@@ -388,7 +388,17 @@ impl super::super::Converter {
 
     pub fn op_hardswish(&mut self, op: &Value) -> anyhow::Result<()> {
         if self.target_opset >= 14 {
-            self.convert_generic_op("hardswish", op)?;
+            let out_id = helper::op_out_id(op)?;
+            let inputs = helper::op_input_ids(op);
+            if inputs.is_empty() {
+                bail!("hardswish missing inputs");
+            }
+            self.onnx_graph.node.push(onnx::NodeProto {
+                op_type: "HardSwish".to_string(),
+                input: vec![self.get_tensor_name(inputs[0])?],
+                output: vec![self.get_tensor_name(out_id)?],
+                ..Default::default()
+            });
             return Ok(());
         }
 
@@ -419,6 +429,166 @@ impl super::super::Converter {
             self.get_tensor_name(out_id)?,
         );
         Ok(())
+    }
+
+    pub fn op_layer_norm(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(17, "layer_norm")?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 3 {
+            bail!("layer_norm missing inputs");
+        }
+        let output_ids = Self::layer_norm_output_ids(op)?;
+        if output_ids.is_empty() {
+            bail!("layer_norm missing outputs");
+        }
+        if output_ids.len() > 3 {
+            bail!(
+                "layer_norm supports at most 3 outputs, got {}",
+                output_ids.len()
+            );
+        }
+
+        let mut output_names = vec![self.get_tensor_name(output_ids[0])?];
+        if output_ids.len() >= 2 {
+            output_names.push(self.get_tensor_name(output_ids[1])?);
+        }
+        let variance_output = if output_ids.len() == 3 {
+            let variance_id = output_ids[2];
+            let inv_stddev = format!("layer_norm_inv_stddev_{}", variance_id);
+            output_names.push(inv_stddev.clone());
+            Some((variance_id, inv_stddev))
+        } else {
+            None
+        };
+
+        let mut node = onnx::NodeProto {
+            op_type: "LayerNormalization".to_string(),
+            input: vec![
+                self.get_tensor_name(inputs[0])?,
+                self.get_tensor_name(inputs[1])?,
+                self.get_tensor_name(inputs[2])?,
+            ],
+            output: output_names,
+            ..Default::default()
+        };
+        if let Some(attrs) = op.get("A") {
+            node.attribute = self.extract_attributes("layer_norm", attrs);
+        }
+        self.onnx_graph.node.push(node);
+
+        if let Some((variance_id, inv_stddev)) = variance_output {
+            let epsilon = helper::attr_f64(op, "epsilon").unwrap_or(1.0e-5);
+            // ONNX `LayerNormalization` emits `InvStdDev` as the stash type, which is
+            // float32 by default (`stash_type = 1`). Reconstruct the variance entirely
+            // in that dtype so the Mul/Reciprocal/Sub chain stays type-consistent, then
+            // cast to the Paddle variance output dtype if it differs (e.g. float16 or
+            // double) — otherwise ONNX checkers reject the mixed-dtype `Sub`.
+            let stash_dtype = dt::FLOAT;
+            let variance_dtype = match self.maybe_onnx_dtype_for_tensor_id(variance_id)? {
+                Some(dtype @ (dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)) => dtype,
+                _ => match self.maybe_onnx_dtype_for_tensor_id(inputs[0])? {
+                    Some(dtype @ (dt::FLOAT16 | dt::FLOAT | dt::DOUBLE)) => dtype,
+                    _ => stash_dtype,
+                },
+            };
+            let inv_stddev_sq = format!("layer_norm_inv_stddev_sq_{}", variance_id);
+            let variance_plus_epsilon = format!("layer_norm_variance_plus_epsilon_{}", variance_id);
+            let epsilon_name = format!("layer_norm_epsilon_{}", variance_id);
+            self.push_numeric_initializer(epsilon_name.clone(), vec![], stash_dtype, &[epsilon])?;
+            self.add_binary_node("Mul", inv_stddev.clone(), inv_stddev, inv_stddev_sq.clone());
+            self.onnx_graph.node.push(onnx::NodeProto {
+                op_type: "Reciprocal".to_string(),
+                input: vec![inv_stddev_sq],
+                output: vec![variance_plus_epsilon.clone()],
+                ..Default::default()
+            });
+            if variance_dtype == stash_dtype {
+                self.add_binary_node(
+                    "Sub",
+                    variance_plus_epsilon,
+                    epsilon_name,
+                    self.get_tensor_name(variance_id)?,
+                );
+            } else {
+                let variance_stash = format!("layer_norm_variance_stash_{}", variance_id);
+                self.add_binary_node(
+                    "Sub",
+                    variance_plus_epsilon,
+                    epsilon_name,
+                    variance_stash.clone(),
+                );
+                self.add_cast_node(
+                    variance_stash,
+                    self.get_tensor_name(variance_id)?,
+                    variance_dtype,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn layer_norm_output_ids(op: &Value) -> anyhow::Result<Vec<i64>> {
+        let Some(outputs) = op.get("O") else {
+            bail!("Missing output ID in op: {:?}", op);
+        };
+        if let Some(arr) = outputs.as_array() {
+            return arr
+                .iter()
+                .map(|output| {
+                    output
+                        .get("%")
+                        .and_then(|id| id.as_i64())
+                        .ok_or_else(|| anyhow::anyhow!("Missing output ID in op: {:?}", op))
+                })
+                .collect();
+        }
+        if let Some(obj) = outputs.as_object()
+            && let Some(id) = obj.get("%").and_then(|id| id.as_i64())
+        {
+            return Ok(vec![id]);
+        }
+        bail!("Missing output ID in op: {:?}", op)
+    }
+
+    fn op_binary_compare(
+        &mut self,
+        op: &Value,
+        direct_op_type: &str,
+        ordered_op_type: &str,
+    ) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 2 {
+            bail!("{} missing inputs", direct_op_type);
+        }
+        let lhs = self.get_tensor_name(inputs[0])?;
+        let rhs = self.get_tensor_name(inputs[1])?;
+        let out_name = self.get_tensor_name(out_id)?;
+        if self.target_opset >= 12 {
+            self.add_binary_node(direct_op_type, lhs, rhs, out_name);
+            return Ok(());
+        }
+
+        let ordered_name = format!("{}_ordered_{}", direct_op_type.to_lowercase(), out_id);
+        let equal_name = format!("{}_equal_{}", direct_op_type.to_lowercase(), out_id);
+        self.add_binary_node(
+            ordered_op_type,
+            lhs.clone(),
+            rhs.clone(),
+            ordered_name.clone(),
+        );
+        self.add_binary_node("Equal", lhs, rhs, equal_name.clone());
+        self.add_binary_node("Or", ordered_name, equal_name, out_name);
+        Ok(())
+    }
+
+    pub fn op_greater_equal(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.op_binary_compare(op, "GreaterOrEqual", "Greater")
+    }
+
+    pub fn op_less_equal(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.op_binary_compare(op, "LessOrEqual", "Less")
     }
 
     pub fn op_gelu(&mut self, op: &Value) -> anyhow::Result<()> {
@@ -876,7 +1046,7 @@ impl super::super::Converter {
 
         if !self.warned_multinomial_degraded {
             log::warn!(
-                "multinomial is lowered to deterministic ArgMax per AGENT.md inference contract"
+                "multinomial is lowered to deterministic ArgMax for inference; stochastic sampling is not preserved"
             );
             self.warned_multinomial_degraded = true;
         }
@@ -892,7 +1062,7 @@ impl super::super::Converter {
             output: vec![argmax_output.clone()],
             ..Default::default()
         };
-        // Deterministic contract per AGENT.md: inference uses argmax instead of stochastic sampling.
+        // Deterministic inference contract: lower to argmax instead of stochastic sampling.
         node.attribute.push(helper::attr_int("axis", -1));
         node.attribute.push(helper::attr_int("keepdims", 1));
         node.attribute
@@ -1114,13 +1284,54 @@ impl super::super::Converter {
     }
 
     pub fn op_softplus(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
         let inputs = helper::op_input_ids(op);
         if inputs.is_empty() {
             bail!("softplus missing input");
         }
-        // ONNX Softplus has no beta/threshold attrs. Use generic path
-        // with default semantics (beta=1, threshold=20).
-        self.convert_generic_op("softplus", op)
+        let beta = helper::attr_f64(op, "beta").unwrap_or(1.0);
+        let threshold = helper::attr_f64(op, "threshold").unwrap_or(20.0);
+        if beta == 0.0 || !beta.is_finite() || !threshold.is_finite() {
+            bail!("softplus requires finite beta != 0 and finite threshold");
+        }
+        let dtype = self
+            .maybe_onnx_dtype_for_tensor_id(inputs[0])?
+            .unwrap_or(dt::FLOAT);
+        let in_name = self.get_tensor_name(inputs[0])?;
+        let beta_name = format!("softplus_beta_{}", out_id);
+        let threshold_name = format!("softplus_threshold_{}", out_id);
+        let scaled_name = format!("softplus_scaled_{}", out_id);
+        let softplus_name = format!("softplus_value_{}", out_id);
+        let unscaled_name = format!("softplus_unscaled_{}", out_id);
+        let linear_cond_name = format!("softplus_linear_cond_{}", out_id);
+        self.push_numeric_initializer(beta_name.clone(), vec![], dtype, &[beta])?;
+        self.push_numeric_initializer(threshold_name.clone(), vec![], dtype, &[threshold])?;
+        self.add_binary_node(
+            "Mul",
+            in_name.clone(),
+            beta_name.clone(),
+            scaled_name.clone(),
+        );
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Softplus".to_string(),
+            input: vec![scaled_name.clone()],
+            output: vec![softplus_name.clone()],
+            ..Default::default()
+        });
+        self.add_binary_node("Div", softplus_name, beta_name, unscaled_name.clone());
+        self.add_binary_node(
+            "Greater",
+            scaled_name,
+            threshold_name,
+            linear_cond_name.clone(),
+        );
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Where".to_string(),
+            input: vec![linear_cond_name, in_name, unscaled_name],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        });
+        Ok(())
     }
 
     pub fn op_thresholded_relu(&mut self, op: &Value) -> anyhow::Result<()> {
@@ -1149,7 +1360,7 @@ impl super::super::Converter {
             bail!("softshrink missing input");
         }
         let lambd = helper::attr_f64(op, "threshold").unwrap_or(0.5);
-        // ONNX has no Softshrink op; use Shrink with bias=0
+        // ONNX has no Softshrink op; Shrink with bias=lambda matches it.
         let mut node = onnx::NodeProto {
             op_type: "Shrink".to_string(),
             input: vec![self.get_tensor_name(inputs[0])?],
@@ -1158,8 +1369,25 @@ impl super::super::Converter {
         };
         node.attribute
             .push(helper::attr_float("lambd", lambd as f32));
-        node.attribute.push(helper::attr_float("bias", 0.0));
+        node.attribute
+            .push(helper::attr_float("bias", lambd as f32));
         self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_round(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(11, "round")?;
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("round missing input");
+        }
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Round".to_string(),
+            input: vec![self.get_tensor_name(inputs[0])?],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        });
         Ok(())
     }
 

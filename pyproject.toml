@@ -27,6 +27,14 @@ dynamic = ["version"]
 [tool.maturin]
 bindings = "bin"
 
+[dependency-groups]
+regression = [
+  "numpy==2.2.6",
+  "onnxruntime==1.23.2",
+  "paddlepaddle==3.2.2",
+  "setuptools>=69",
+]
+
 [project.urls]
 Documentation = "https://github.com/greatv/p2o#readme"
 Issues = "https://github.com/greatv/p2o/issues"

@@ -8,6 +8,482 @@ use serde_json::json;
 use std::fs;
 use std::io::Write;
 
+fn scalar_f32_initializer(converter: &Converter, name: &str) -> f32 {
+    let tensor = converter
+        .onnx_graph
+        .initializer
+        .iter()
+        .find(|tensor| tensor.name == name)
+        .unwrap();
+    let bytes: [u8; 4] = tensor.raw_data.as_slice().try_into().unwrap();
+    f32::from_le_bytes(bytes)
+}
+
+#[test]
+fn test_softplus_lowers_beta_and_threshold_semantics() {
+    let mut converter = Converter::new();
+    converter
+        .state
+        .tensor_types
+        .insert(10, "0.t_f32".to_string());
+
+    let op_json = json!({
+        "#": "1.softplus",
+        "A": [
+            { "AT": { "D": 2.0 }, "N": "beta" },
+            { "AT": { "D": 4.0 }, "N": "threshold" }
+        ],
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    converter.process_pass2_op("1.softplus", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    let node_types = graph
+        .node
+        .iter()
+        .map(|node| node.op_type.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        node_types,
+        vec!["Mul", "Softplus", "Div", "Greater", "Where"]
+    );
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "softplus_beta_11"]);
+    assert_eq!(graph.node[1].input, vec!["softplus_scaled_11"]);
+    assert_eq!(
+        graph.node[2].input,
+        vec!["softplus_value_11", "softplus_beta_11"]
+    );
+    assert_eq!(
+        graph.node[3].input,
+        vec!["softplus_scaled_11", "softplus_threshold_11"]
+    );
+    assert_eq!(
+        graph.node[4].input,
+        vec![
+            "softplus_linear_cond_11",
+            "tensor_10",
+            "softplus_unscaled_11"
+        ]
+    );
+    assert_eq!(graph.node[4].output, vec!["tensor_11"]);
+    assert_eq!(scalar_f32_initializer(&converter, "softplus_beta_11"), 2.0);
+    assert_eq!(
+        scalar_f32_initializer(&converter, "softplus_threshold_11"),
+        4.0
+    );
+}
+
+#[test]
+fn test_softplus_rejects_zero_beta() {
+    let mut converter = Converter::new();
+
+    let op_json = json!({
+        "#": "1.softplus",
+        "A": [
+            { "AT": { "D": 0.0 }, "N": "beta" },
+            { "AT": { "D": 20.0 }, "N": "threshold" }
+        ],
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    let err = converter
+        .process_pass2_op("1.softplus", &op_json)
+        .unwrap_err();
+    assert!(err.to_string().contains("finite beta != 0"));
+}
+
+#[test]
+fn test_softshrink_sets_shrink_bias_to_threshold() {
+    let mut converter = Converter::new();
+
+    let op_json = json!({
+        "#": "1.softshrink",
+        "A": [
+            { "AT": { "D": 0.75 }, "N": "threshold" }
+        ],
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.softshrink", &op_json)
+        .unwrap();
+
+    let node = &converter.onnx_graph.node[0];
+    assert_eq!(node.op_type, "Shrink");
+    let lambd = node
+        .attribute
+        .iter()
+        .find(|attr| attr.name == "lambd")
+        .unwrap()
+        .f;
+    let bias = node
+        .attribute
+        .iter()
+        .find(|attr| attr.name == "bias")
+        .unwrap()
+        .f;
+    assert_eq!(lambd, 0.75);
+    assert_eq!(bias, 0.75);
+}
+
+#[test]
+fn test_round_requires_opset_11() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(10);
+
+    let op_json = json!({
+        "#": "1.round",
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    let err = converter.process_pass2_op("1.round", &op_json).unwrap_err();
+    assert!(err.to_string().contains("round requires opset >= 11"));
+}
+
+#[test]
+fn test_round_emits_direct_onnx_node_at_opset_11() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(11);
+
+    let op_json = json!({
+        "#": "1.round",
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    converter.process_pass2_op("1.round", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "Round");
+    assert_eq!(graph.node[0].input, vec!["tensor_10"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_11"]);
+}
+
+#[test]
+fn test_hardswish_opset_14_does_not_forward_paddle_attrs() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(14);
+
+    let op_json = json!({
+        "#": "1.hardswish",
+        "A": [
+            { "AT": { "D": "/scope/Hardswish/" }, "N": "struct_name" }
+        ],
+        "I": [
+            { "%": 10 }
+        ],
+        "O": [
+            { "%": 11 }
+        ]
+    });
+
+    converter.process_pass2_op("1.hardswish", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "HardSwish");
+    assert!(graph.node[0].attribute.is_empty());
+    assert_eq!(graph.node[0].input, vec!["tensor_10"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_11"]);
+}
+
+#[test]
+fn test_layer_norm_requires_opset_17() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(16);
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 }
+        ]
+    });
+
+    let err = converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap_err();
+    assert!(err.to_string().contains("layer_norm requires opset >= 17"));
+}
+
+#[test]
+fn test_layer_norm_emits_onnx_node_at_opset_17() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "A": [
+            { "AT": { "#": "0.a_f32", "D": 1e-5 }, "N": "epsilon" },
+            { "AT": { "#": "0.a_i32", "D": 2 }, "N": "begin_norm_axis" },
+            { "AT": { "#": "0.a_str", "D": "/scope/LayerNorm/" }, "N": "struct_name" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap();
+
+    let node = &converter.onnx_graph.node[0];
+    assert_eq!(node.op_type, "LayerNormalization");
+    assert_eq!(node.input, vec!["tensor_10", "tensor_11", "tensor_12"]);
+    assert_eq!(node.output, vec!["tensor_13"]);
+    assert!(
+        node.attribute
+            .iter()
+            .any(|attr| attr.name == "axis" && attr.i == 2)
+    );
+    assert!(!node.attribute.iter().any(|attr| attr.name == "struct_name"));
+}
+
+#[test]
+fn test_layer_norm_reconstructs_variance_output() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+    converter
+        .state
+        .tensor_types
+        .insert(10, "0.t_f32".to_string());
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "A": [
+            { "AT": { "#": "0.a_f32", "D": 0.001 }, "N": "epsilon" },
+            { "AT": { "#": "0.a_i32", "D": 2 }, "N": "begin_norm_axis" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 },
+            { "%": 14 },
+            { "%": 15 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap();
+
+    assert_eq!(converter.onnx_graph.node.len(), 4);
+    assert_eq!(converter.onnx_graph.node[0].op_type, "LayerNormalization");
+    assert_eq!(
+        converter.onnx_graph.node[0].output,
+        vec!["tensor_13", "tensor_14", "layer_norm_inv_stddev_15"]
+    );
+    assert_eq!(converter.onnx_graph.node[1].op_type, "Mul");
+    assert_eq!(converter.onnx_graph.node[2].op_type, "Reciprocal");
+    assert_eq!(converter.onnx_graph.node[3].op_type, "Sub");
+    assert_eq!(converter.onnx_graph.node[3].output, vec!["tensor_15"]);
+    assert_eq!(
+        scalar_f32_initializer(&converter, "layer_norm_epsilon_15"),
+        0.001
+    );
+    // float32 input: epsilon is float32 and no cast is inserted.
+    let epsilon = converter
+        .onnx_graph
+        .initializer
+        .iter()
+        .find(|tensor| tensor.name == "layer_norm_epsilon_15")
+        .unwrap();
+    assert_eq!(epsilon.data_type, dt::FLOAT);
+    assert!(
+        !converter
+            .onnx_graph
+            .node
+            .iter()
+            .any(|node| node.op_type == "Cast")
+    );
+}
+
+#[test]
+fn test_layer_norm_variance_casts_to_float16_output_dtype() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(17);
+    // float16 input/variance: ONNX InvStdDev stays float32 (stash type), so the
+    // reconstruction must run in float32 and cast the variance to float16.
+    converter
+        .state
+        .tensor_types
+        .insert(10, "0.t_f16".to_string());
+    converter
+        .state
+        .tensor_types
+        .insert(15, "0.t_f16".to_string());
+
+    let op_json = json!({
+        "#": "1.layer_norm",
+        "A": [
+            { "AT": { "#": "0.a_f32", "D": 0.001 }, "N": "epsilon" },
+            { "AT": { "#": "0.a_i32", "D": 2 }, "N": "begin_norm_axis" }
+        ],
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 },
+            { "%": 14 },
+            { "%": 15 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.layer_norm", &op_json)
+        .unwrap();
+
+    // LayerNormalization, Mul, Reciprocal, Sub, Cast.
+    assert_eq!(converter.onnx_graph.node.len(), 5);
+    let sub = &converter.onnx_graph.node[3];
+    assert_eq!(sub.op_type, "Sub");
+    assert_eq!(sub.output, vec!["layer_norm_variance_stash_15"]);
+    let cast = &converter.onnx_graph.node[4];
+    assert_eq!(cast.op_type, "Cast");
+    assert_eq!(cast.input, vec!["layer_norm_variance_stash_15"]);
+    assert_eq!(cast.output, vec!["tensor_15"]);
+    assert!(
+        cast.attribute
+            .iter()
+            .any(|attr| attr.name == "to" && attr.i == i64::from(dt::FLOAT16))
+    );
+    // epsilon is built in the float32 stash dtype, not float16.
+    let epsilon = converter
+        .onnx_graph
+        .initializer
+        .iter()
+        .find(|tensor| tensor.name == "layer_norm_epsilon_15")
+        .unwrap();
+    assert_eq!(epsilon.data_type, dt::FLOAT);
+}
+
+#[test]
+fn test_greater_equal_lowers_before_opset_12() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(11);
+
+    let op_json = json!({
+        "#": "1.greater_equal",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.greater_equal", &op_json)
+        .unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 3);
+    assert_eq!(graph.node[0].op_type, "Greater");
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[1].op_type, "Equal");
+    assert_eq!(graph.node[1].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[2].op_type, "Or");
+    assert_eq!(graph.node[2].output, vec!["tensor_12"]);
+}
+
+#[test]
+fn test_less_equal_lowers_before_opset_12_with_nan_safe_ordered_compare() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(11);
+
+    let op_json = json!({
+        "#": "1.less_equal",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.less_equal", &op_json)
+        .unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 3);
+    assert_eq!(graph.node[0].op_type, "Less");
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[1].op_type, "Equal");
+    assert_eq!(graph.node[1].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[2].op_type, "Or");
+    assert_eq!(graph.node[2].output, vec!["tensor_12"]);
+}
+
+#[test]
+fn test_less_equal_uses_direct_onnx_op_at_opset_12() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(12);
+
+    let op_json = json!({
+        "#": "1.less_equal",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter
+        .process_pass2_op("1.less_equal", &op_json)
+        .unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "LessOrEqual");
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_12"]);
+}
+
 #[test]
 fn test_scale_with_input_tensor_and_bias_before_scale_uses_input_scale_tensor() {
     let mut converter = Converter::new();
