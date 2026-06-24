@@ -388,7 +388,17 @@ impl super::super::Converter {
 
     pub fn op_hardswish(&mut self, op: &Value) -> anyhow::Result<()> {
         if self.target_opset >= 14 {
-            self.convert_generic_op("hardswish", op)?;
+            let out_id = helper::op_out_id(op)?;
+            let inputs = helper::op_input_ids(op);
+            if inputs.is_empty() {
+                bail!("hardswish missing inputs");
+            }
+            self.onnx_graph.node.push(onnx::NodeProto {
+                op_type: "HardSwish".to_string(),
+                input: vec![self.get_tensor_name(inputs[0])?],
+                output: vec![self.get_tensor_name(out_id)?],
+                ..Default::default()
+            });
             return Ok(());
         }
 
@@ -419,6 +429,49 @@ impl super::super::Converter {
             self.get_tensor_name(out_id)?,
         );
         Ok(())
+    }
+
+    pub fn op_layer_norm(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(17, "layer_norm")?;
+        self.convert_generic_op("layer_norm", op)
+    }
+
+    fn op_binary_compare(
+        &mut self,
+        op: &Value,
+        direct_op_type: &str,
+        fallback_op_type: &str,
+    ) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 2 {
+            bail!("{} missing inputs", direct_op_type);
+        }
+        let lhs = self.get_tensor_name(inputs[0])?;
+        let rhs = self.get_tensor_name(inputs[1])?;
+        let out_name = self.get_tensor_name(out_id)?;
+        if self.target_opset >= 12 {
+            self.add_binary_node(direct_op_type, lhs, rhs, out_name);
+            return Ok(());
+        }
+
+        let compare_name = format!("{}_compare_{}", direct_op_type.to_lowercase(), out_id);
+        self.add_binary_node(fallback_op_type, lhs, rhs, compare_name.clone());
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Not".to_string(),
+            input: vec![compare_name],
+            output: vec![out_name],
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    pub fn op_greater_equal(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.op_binary_compare(op, "GreaterOrEqual", "Less")
+    }
+
+    pub fn op_less_equal(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.op_binary_compare(op, "LessOrEqual", "Greater")
     }
 
     pub fn op_gelu(&mut self, op: &Value) -> anyhow::Result<()> {
@@ -1114,13 +1167,54 @@ impl super::super::Converter {
     }
 
     pub fn op_softplus(&mut self, op: &Value) -> anyhow::Result<()> {
+        let out_id = helper::op_out_id(op)?;
         let inputs = helper::op_input_ids(op);
         if inputs.is_empty() {
             bail!("softplus missing input");
         }
-        // ONNX Softplus has no beta/threshold attrs. Use generic path
-        // with default semantics (beta=1, threshold=20).
-        self.convert_generic_op("softplus", op)
+        let beta = helper::attr_f64(op, "beta").unwrap_or(1.0);
+        let threshold = helper::attr_f64(op, "threshold").unwrap_or(20.0);
+        if beta == 0.0 || !beta.is_finite() || !threshold.is_finite() {
+            bail!("softplus requires finite beta != 0 and finite threshold");
+        }
+        let dtype = self
+            .maybe_onnx_dtype_for_tensor_id(inputs[0])?
+            .unwrap_or(dt::FLOAT);
+        let in_name = self.get_tensor_name(inputs[0])?;
+        let beta_name = format!("softplus_beta_{}", out_id);
+        let threshold_name = format!("softplus_threshold_{}", out_id);
+        let scaled_name = format!("softplus_scaled_{}", out_id);
+        let softplus_name = format!("softplus_value_{}", out_id);
+        let unscaled_name = format!("softplus_unscaled_{}", out_id);
+        let linear_cond_name = format!("softplus_linear_cond_{}", out_id);
+        self.push_numeric_initializer(beta_name.clone(), vec![], dtype, &[beta])?;
+        self.push_numeric_initializer(threshold_name.clone(), vec![], dtype, &[threshold])?;
+        self.add_binary_node(
+            "Mul",
+            in_name.clone(),
+            beta_name.clone(),
+            scaled_name.clone(),
+        );
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Softplus".to_string(),
+            input: vec![scaled_name.clone()],
+            output: vec![softplus_name.clone()],
+            ..Default::default()
+        });
+        self.add_binary_node("Div", softplus_name, beta_name, unscaled_name.clone());
+        self.add_binary_node(
+            "Greater",
+            scaled_name,
+            threshold_name,
+            linear_cond_name.clone(),
+        );
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Where".to_string(),
+            input: vec![linear_cond_name, in_name, unscaled_name],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        });
+        Ok(())
     }
 
     pub fn op_thresholded_relu(&mut self, op: &Value) -> anyhow::Result<()> {
@@ -1149,7 +1243,7 @@ impl super::super::Converter {
             bail!("softshrink missing input");
         }
         let lambd = helper::attr_f64(op, "threshold").unwrap_or(0.5);
-        // ONNX has no Softshrink op; use Shrink with bias=0
+        // ONNX has no Softshrink op; Shrink with bias=lambda matches it.
         let mut node = onnx::NodeProto {
             op_type: "Shrink".to_string(),
             input: vec![self.get_tensor_name(inputs[0])?],
@@ -1158,8 +1252,25 @@ impl super::super::Converter {
         };
         node.attribute
             .push(helper::attr_float("lambd", lambd as f32));
-        node.attribute.push(helper::attr_float("bias", 0.0));
+        node.attribute
+            .push(helper::attr_float("bias", lambd as f32));
         self.onnx_graph.node.push(node);
+        Ok(())
+    }
+
+    pub fn op_round(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(11, "round")?;
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.is_empty() {
+            bail!("round missing input");
+        }
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "Round".to_string(),
+            input: vec![self.get_tensor_name(inputs[0])?],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        });
         Ok(())
     }
 

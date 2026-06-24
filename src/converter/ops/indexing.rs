@@ -36,6 +36,25 @@ impl Converter {
         Ok(())
     }
 
+    pub fn op_gather_nd(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(11, "gather_nd")?;
+        let out_id = helper::op_out_id(op)?;
+        let inputs = helper::op_input_ids(op);
+        if inputs.len() < 2 {
+            bail!("gather_nd missing inputs");
+        }
+        self.onnx_graph.node.push(onnx::NodeProto {
+            op_type: "GatherND".to_string(),
+            input: vec![
+                self.get_tensor_name(inputs[0])?,
+                self.get_tensor_name(inputs[1])?,
+            ],
+            output: vec![self.get_tensor_name(out_id)?],
+            ..Default::default()
+        });
+        Ok(())
+    }
+
     pub fn op_index_select(&mut self, op: &Value) -> anyhow::Result<()> {
         let out_id = helper::op_out_id(op)?;
         let inputs = helper::op_input_ids(op);

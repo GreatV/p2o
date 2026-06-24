@@ -386,6 +386,7 @@ impl super::super::Converter {
     }
 
     pub fn op_arange(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.require_opset(11, "arange")?;
         let out_id = helper::op_out_id(op)?;
         let inputs = helper::op_input_ids(op);
         if inputs.len() < 3 {

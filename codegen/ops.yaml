@@ -70,9 +70,18 @@ pass2_dispatch:
   - op: "1.hardswish"
     kind: simple
     method: op_hardswish
+  - op: "1.layer_norm"
+    kind: simple
+    method: op_layer_norm
   - op: "1.gelu"
     kind: simple
     method: op_gelu
+  - op: "1.greater_equal"
+    kind: simple
+    method: op_greater_equal
+  - op: "1.less_equal"
+    kind: simple
+    method: op_less_equal
   - op: "1.stack"
     kind: simple
     method: op_stack
@@ -92,6 +101,9 @@ pass2_dispatch:
     kind: simple
     method: op_bilinear_interp
   - op: "1.arange"
+    kind: simple
+    method: op_arange
+  - op: "1.range"
     kind: simple
     method: op_arange
   - op: "1.pool2d"
@@ -154,6 +166,9 @@ pass2_dispatch:
   - op: "1.softshrink"
     kind: simple
     method: op_softshrink
+  - op: "1.round"
+    kind: simple
+    method: op_round
   - op: "1.square"
     kind: simple
     method: op_square
@@ -177,6 +192,9 @@ pass2_dispatch:
   - op: "1.gather"
     kind: simple
     method: op_gather
+  - op: "1.gather_nd"
+    kind: simple
+    method: op_gather_nd
   - op: "1.index_select"
     kind: simple
     method: op_index_select
@@ -398,8 +416,6 @@ op_type_map:
     onnx: "Erf"
   - paddle: ["sign"]
     onnx: "Sign"
-  - paddle: ["round"]
-    onnx: "Round"
   - paddle: ["reciprocal"]
     onnx: "Reciprocal"
   - paddle: ["sinh"]

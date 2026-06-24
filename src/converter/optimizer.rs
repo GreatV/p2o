@@ -395,11 +395,14 @@ impl GraphOptimizer {
             for attr in &mut node.attribute {
                 if let Some(subgraph) = attr.g.as_mut()
                     && !Self::subgraph_shadows(subgraph, from)
+                    && !Self::subgraph_shadows(subgraph, to)
                 {
                     Self::replace_inputs_recursive(subgraph, from, to);
                 }
                 for subgraph in &mut attr.graphs {
-                    if !Self::subgraph_shadows(subgraph, from) {
+                    if !Self::subgraph_shadows(subgraph, from)
+                        && !Self::subgraph_shadows(subgraph, to)
+                    {
                         Self::replace_inputs_recursive(subgraph, from, to);
                     }
                 }
@@ -408,16 +411,76 @@ impl GraphOptimizer {
     }
 
     /// Whether `name` is rebound inside `graph` (as a formal input, initializer,
-    /// or locally produced value). ONNX scoping makes such a definition shadow
+    /// formal output, or locally produced value). ONNX scoping makes such a definition shadow
     /// any outer value of the same name, so a parent-graph rewrite must not
     /// recurse into the subgraph for that name.
     fn subgraph_shadows(graph: &onnx::GraphProto, name: &str) -> bool {
         graph.input.iter().any(|value| value.name == name)
+            || graph.output.iter().any(|value| value.name == name)
             || graph.initializer.iter().any(|tensor| tensor.name == name)
             || graph
                 .node
                 .iter()
                 .any(|node| node.output.iter().any(|output| output == name))
+    }
+
+    fn graph_uses_outer_name(graph: &onnx::GraphProto, name: &str) -> bool {
+        for node in &graph.node {
+            if node.input.iter().any(|input| input == name) {
+                return true;
+            }
+            for attr in &node.attribute {
+                if let Some(subgraph) = attr.g.as_ref()
+                    && !Self::subgraph_shadows(subgraph, name)
+                    && Self::graph_uses_outer_name(subgraph, name)
+                {
+                    return true;
+                }
+                for subgraph in &attr.graphs {
+                    if !Self::subgraph_shadows(subgraph, name)
+                        && Self::graph_uses_outer_name(subgraph, name)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn rewrite_is_safe(graph: &onnx::GraphProto, from: &str, to: &str) -> bool {
+        if from == to {
+            return false;
+        }
+        Self::rewrite_is_safe_in_subgraphs(graph, from, to)
+    }
+
+    fn rewrite_is_safe_in_subgraphs(graph: &onnx::GraphProto, from: &str, to: &str) -> bool {
+        for node in &graph.node {
+            for attr in &node.attribute {
+                if let Some(subgraph) = attr.g.as_ref()
+                    && !Self::subgraph_rewrite_is_safe(subgraph, from, to)
+                {
+                    return false;
+                }
+                for subgraph in &attr.graphs {
+                    if !Self::subgraph_rewrite_is_safe(subgraph, from, to) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    fn subgraph_rewrite_is_safe(graph: &onnx::GraphProto, from: &str, to: &str) -> bool {
+        if Self::subgraph_shadows(graph, from) {
+            return true;
+        }
+        if Self::subgraph_shadows(graph, to) && Self::graph_uses_outer_name(graph, from) {
+            return false;
+        }
+        Self::rewrite_is_safe_in_subgraphs(graph, from, to)
     }
 
     fn apply_rewrites_recursive(graph: &mut onnx::GraphProto, rewrites: &[(String, String)]) {
@@ -735,8 +798,12 @@ impl GraphOptimizer {
             else {
                 continue;
             };
+            let rewrite_is_safe = Self::rewrite_is_safe(graph, output, input_name);
             value.tensor.dims = new_dims;
             if Self::single_use(&facts, input_name) {
+                if !rewrite_is_safe {
+                    continue;
+                }
                 updates.push(value);
                 rewrites.push((output.clone(), input_name.clone()));
             } else if matches!(value.location, ConstLocation::Initializer(_)) {
@@ -817,6 +884,9 @@ impl GraphOptimizer {
             let Some(new_dims) = Self::unsqueeze_dims(&value.tensor.dims, &axes) else {
                 continue;
             };
+            if !Self::rewrite_is_safe(graph, output, input_name) {
+                continue;
+            }
             value.tensor.dims = new_dims;
             updates.push(value);
             rewrites.push((output.clone(), input_name.clone()));
@@ -996,6 +1066,9 @@ impl GraphOptimizer {
                 value.tensor.double_data.clear();
                 value.tensor.uint64_data.clear();
             }
+            if !Self::rewrite_is_safe(graph, output, input_name) {
+                continue;
+            }
             updates.push(value);
             rewrites.push((output.clone(), input_name.clone()));
             remove[idx] = true;
@@ -1077,6 +1150,7 @@ impl GraphOptimizer {
                         &value.tensor,
                         passthrough_name,
                     )
+                    && Self::rewrite_is_safe(graph, output, passthrough_name)
                 {
                     rewrites.push((output.clone(), passthrough_name.clone()));
                     remove[idx] = true;
@@ -1119,6 +1193,7 @@ impl GraphOptimizer {
             }
             if let Some(perm) = Self::transpose_perm(node)
                 && Self::is_identity_perm(&perm)
+                && Self::rewrite_is_safe(graph, output, &node.input[0])
             {
                 rewrites.push((output.clone(), node.input[0].clone()));
                 remove[idx] = true;
@@ -1968,6 +2043,34 @@ mod tests {
         assert_eq!(graph.node.len(), 1);
         assert_eq!(graph.node[0].op_type, "Relu");
         assert_eq!(graph.node[0].input, vec!["x"]);
+    }
+
+    #[test]
+    fn optimizer_skips_rewrite_when_subgraph_shadows_target() {
+        let then_graph = onnx::GraphProto {
+            input: vec![graph_output("x")],
+            node: vec![node("Identity", &["add_out"], &["then_out"])],
+            output: vec![graph_output("then_out")],
+            ..Default::default()
+        };
+        let mut if_node = node("If", &["cond"], &["if_out"]);
+        if_node.attribute.push(onnx::AttributeProto {
+            name: "then_branch".to_string(),
+            g: Some(then_graph),
+            ..Default::default()
+        });
+        let mut graph = onnx::GraphProto {
+            initializer: vec![f32_tensor("zero", vec![], &[0.0])],
+            node: vec![node("Add", &["x", "zero"], &["add_out"]), if_node],
+            output: vec![graph_output("if_out")],
+            ..Default::default()
+        };
+
+        GraphOptimizer::optimize_for_test(&mut graph);
+
+        assert_eq!(graph.node[0].op_type, "Add");
+        let then_graph = graph.node[1].attribute[0].g.as_ref().unwrap();
+        assert_eq!(then_graph.node[0].input, vec!["add_out"]);
     }
 
     #[test]

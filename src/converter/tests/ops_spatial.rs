@@ -9,6 +9,76 @@ use std::fs;
 use std::io::Write;
 
 #[test]
+fn test_arange_requires_opset_11() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(10);
+
+    let op_json = json!({
+        "#": "1.arange",
+        "I": [
+            { "%": 10 },
+            { "%": 11 },
+            { "%": 12 }
+        ],
+        "O": [
+            { "%": 13 }
+        ]
+    });
+
+    let err = converter
+        .process_pass2_op("1.arange", &op_json)
+        .unwrap_err();
+    assert!(err.to_string().contains("arange requires opset >= 11"));
+}
+
+#[test]
+fn test_gather_nd_requires_opset_11() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(10);
+
+    let op_json = json!({
+        "#": "1.gather_nd",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    let err = converter
+        .process_pass2_op("1.gather_nd", &op_json)
+        .unwrap_err();
+    assert!(err.to_string().contains("gather_nd requires opset >= 11"));
+}
+
+#[test]
+fn test_gather_nd_emits_direct_onnx_node_at_opset_11() {
+    let mut converter = Converter::new();
+    converter.set_target_opset(11);
+
+    let op_json = json!({
+        "#": "1.gather_nd",
+        "I": [
+            { "%": 10 },
+            { "%": 11 }
+        ],
+        "O": [
+            { "%": 12 }
+        ]
+    });
+
+    converter.process_pass2_op("1.gather_nd", &op_json).unwrap();
+
+    let graph = &converter.onnx_graph;
+    assert_eq!(graph.node.len(), 1);
+    assert_eq!(graph.node[0].op_type, "GatherND");
+    assert_eq!(graph.node[0].input, vec!["tensor_10", "tensor_11"]);
+    assert_eq!(graph.node[0].output, vec!["tensor_12"]);
+}
+
+#[test]
 fn test_topk_casts_int32_k_to_int64() {
     let mut converter = Converter::new();
     converter
