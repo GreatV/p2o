@@ -47,6 +47,10 @@ impl Converter {
         self.reduce_via_const_axes(op, "mean missing inputs", "ReduceMean", "reduce_mean")
     }
 
+    pub fn op_reduce_prod(&mut self, op: &Value) -> anyhow::Result<()> {
+        self.reduce_via_const_axes(op, "prod missing inputs", "ReduceProd", "reduce_prod")
+    }
+
     pub fn op_reduce_min(&mut self, op: &Value) -> anyhow::Result<()> {
         self.reduce_via_const_axes(op, "min missing inputs", "ReduceMin", "reduce_min")
     }
