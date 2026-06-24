@@ -49,7 +49,10 @@ pub(crate) struct OptimizerPasses {
 impl Default for OptimizerPasses {
     fn default() -> Self {
         Self {
-            flush_subnormal_initializers: true,
+            // Off by default: zeroing subnormal float constants is a lossy
+            // transform (an epsilon/denominator/threshold can change), so it
+            // must be opted into rather than applied to a plain `--optimize basic`.
+            flush_subnormal_initializers: false,
             fuse_constant_reshape: true,
             fuse_constant_unsqueeze: true,
             fuse_constant_cast: true,
@@ -280,8 +283,11 @@ impl GraphOptimizer {
             report.iterations = iteration + 1;
         }
 
-        report.nodes_after = graph.node.len();
-        report.initializers_after = graph.initializer.len();
+        // `merge` above already folded in each subgraph's before/after counts;
+        // add this graph's own counts so the `*_after` totals stay consistent
+        // with `*_before` rather than overwriting away the subgraph contributions.
+        report.nodes_after += graph.node.len();
+        report.initializers_after += graph.initializer.len();
         Ok(report)
     }
 
@@ -387,14 +393,31 @@ impl GraphOptimizer {
                 }
             }
             for attr in &mut node.attribute {
-                if let Some(subgraph) = attr.g.as_mut() {
+                if let Some(subgraph) = attr.g.as_mut()
+                    && !Self::subgraph_shadows(subgraph, from)
+                {
                     Self::replace_inputs_recursive(subgraph, from, to);
                 }
                 for subgraph in &mut attr.graphs {
-                    Self::replace_inputs_recursive(subgraph, from, to);
+                    if !Self::subgraph_shadows(subgraph, from) {
+                        Self::replace_inputs_recursive(subgraph, from, to);
+                    }
                 }
             }
         }
+    }
+
+    /// Whether `name` is rebound inside `graph` (as a formal input, initializer,
+    /// or locally produced value). ONNX scoping makes such a definition shadow
+    /// any outer value of the same name, so a parent-graph rewrite must not
+    /// recurse into the subgraph for that name.
+    fn subgraph_shadows(graph: &onnx::GraphProto, name: &str) -> bool {
+        graph.input.iter().any(|value| value.name == name)
+            || graph.initializer.iter().any(|tensor| tensor.name == name)
+            || graph
+                .node
+                .iter()
+                .any(|node| node.output.iter().any(|output| output == name))
     }
 
     fn apply_rewrites_recursive(graph: &mut onnx::GraphProto, rewrites: &[(String, String)]) {
@@ -536,7 +559,11 @@ impl GraphOptimizer {
     }
 
     fn single_use(facts: &GraphFacts, name: &str) -> bool {
-        facts.uses.get(name).copied().unwrap_or_default() == 1
+        // A value exported as a graph output counts as an extra use: folding it
+        // in place or rewiring its sole consumer would change what the graph
+        // exposes, so such values are never treated as single-use.
+        !facts.graph_outputs.contains(name)
+            && facts.uses.get(name).copied().unwrap_or_default() == 1
     }
 
     fn static_i64_tensor(tensor: &onnx::TensorProto) -> Option<Vec<i64>> {
@@ -743,7 +770,7 @@ impl GraphOptimizer {
             } else {
                 axis
             };
-            if axis < 0 || axis as usize > output_rank {
+            if axis < 0 || axis as usize >= output_rank {
                 return None;
             }
             normalized.push(axis as usize);
@@ -1211,6 +1238,16 @@ impl GraphOptimizer {
                 .node
                 .iter()
                 .flat_map(|node| node.output.iter().filter(|name| !name.is_empty()).cloned()),
+        );
+        // Also avoid colliding with graph boundary tensors so a fresh
+        // initializer can never shadow an existing input/output/value_info.
+        used.extend(
+            graph
+                .input
+                .iter()
+                .chain(graph.output.iter())
+                .chain(graph.value_info.iter())
+                .map(|value| value.name.clone()),
         );
         if !used.contains(base) {
             return base.to_string();
@@ -1772,7 +1809,11 @@ mod tests {
             ..Default::default()
         };
 
-        let report = GraphOptimizer::optimize_for_test(&mut graph);
+        // The pass is opt-in, so enable it explicitly for this test.
+        let mut options = super::OptimizerOptions::default();
+        options.passes.flush_subnormal_initializers = true;
+        let report =
+            GraphOptimizer::optimize_graph(&mut graph, &options).expect("optimizer failed");
 
         assert!(
             report

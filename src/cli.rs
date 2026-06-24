@@ -65,7 +65,8 @@ pub struct Cli {
     /// Target ONNX Opset version
     #[arg(
         long,
-        default_value = "17",
+        // `auto` resolves to DEFAULT_OPSET, so the default stays in sync with it.
+        default_value = "auto",
         value_parser = parse_target_opset,
         help = "Target ONNX opset version (>= 10, e.g. 17) or auto"
     )]

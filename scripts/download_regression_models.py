@@ -17,13 +17,22 @@ DEFAULT_BASE_URL = (
 )
 REQUIRED_FILES = ("inference.json", "inference.pdiparams")
 OPTIONAL_FILES = ("inference.yml",)
+# Bound every network read so a hung connection can't stall CI indefinitely.
+DOWNLOAD_TIMEOUT = 30
 
 
 class ModelDownload:
-    def __init__(self, name: str, model_dir: Path, hf_repo: str | None = None):
+    def __init__(
+        self,
+        name: str,
+        model_dir: Path,
+        hf_repo: str | None = None,
+        hf_revision: str = "main",
+    ):
         self.name = name
         self.model_dir = model_dir
         self.hf_repo = hf_repo
+        self.hf_revision = hf_revision
 
 
 def load_manifest(manifest_path: Path) -> list[ModelDownload]:
@@ -49,7 +58,10 @@ def load_manifest(manifest_path: Path) -> list[ModelDownload]:
         hf_repo = item.get("hf_repo")
         if hf_repo is not None and (not isinstance(hf_repo, str) or not hf_repo):
             raise ValueError(f"Model '{name}' has invalid 'hf_repo'")
-        models.append(ModelDownload(name, model_dir, hf_repo))
+        hf_revision = item.get("hf_revision", "main")
+        if not isinstance(hf_revision, str) or not hf_revision:
+            raise ValueError(f"Model '{name}' has invalid 'hf_revision'")
+        models.append(ModelDownload(name, model_dir, hf_repo, hf_revision))
     return models
 
 
@@ -75,12 +87,16 @@ def has_required_files(model_dir: Path) -> bool:
 
 
 def download_archive(url: str, archive_path: Path) -> None:
-    with urllib.request.urlopen(url) as response, archive_path.open("wb") as handle:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response, archive_path.open(
+        "wb"
+    ) as handle:
         shutil.copyfileobj(response, handle)
 
 
 def download_file(url: str, output_path: Path) -> None:
-    with urllib.request.urlopen(url) as response, output_path.open("wb") as handle:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response, output_path.open(
+        "wb"
+    ) as handle:
         shutil.copyfileobj(response, handle)
 
 
@@ -139,10 +155,11 @@ def remove_existing(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def hf_file_url(repo: str, filename: str) -> str:
+def hf_file_url(repo: str, filename: str, revision: str = "main") -> str:
     quoted_repo = "/".join(urllib.parse.quote(part, safe="") for part in repo.split("/"))
+    quoted_revision = urllib.parse.quote(revision, safe="")
     quoted_filename = urllib.parse.quote(filename, safe="/")
-    return f"https://huggingface.co/{quoted_repo}/resolve/main/{quoted_filename}"
+    return f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
 
 
 def ensure_hf_model(model: ModelDownload, dry_run: bool) -> None:
@@ -153,10 +170,11 @@ def ensure_hf_model(model: ModelDownload, dry_run: bool) -> None:
     assert model.hf_repo is not None
     if dry_run:
         for filename in REQUIRED_FILES + OPTIONAL_FILES:
-            print(f"[plan] {model.name}: {hf_file_url(model.hf_repo, filename)} -> {model.model_dir / filename}")
+            url = hf_file_url(model.hf_repo, filename, model.hf_revision)
+            print(f"[plan] {model.name}: {url} -> {model.model_dir / filename}")
         return
 
-    print(f"[download] {model.name}: hf://{model.hf_repo}")
+    print(f"[download] {model.name}: hf://{model.hf_repo}@{model.hf_revision}")
     model.model_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=f".download_{model.model_dir.name}_",
@@ -164,10 +182,14 @@ def ensure_hf_model(model: ModelDownload, dry_run: bool) -> None:
     ) as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
         for filename in REQUIRED_FILES:
-            download_file(hf_file_url(model.hf_repo, filename), temp_dir / filename)
+            download_file(
+                hf_file_url(model.hf_repo, filename, model.hf_revision), temp_dir / filename
+            )
         for filename in OPTIONAL_FILES:
             try:
-                download_file(hf_file_url(model.hf_repo, filename), temp_dir / filename)
+                download_file(
+                    hf_file_url(model.hf_repo, filename, model.hf_revision), temp_dir / filename
+                )
             except Exception as exc:
                 print(f"[warn] {model.name}: optional {filename} not downloaded ({exc})")
 

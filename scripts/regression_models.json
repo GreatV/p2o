@@ -30,6 +30,7 @@
       "name": "ppocrv6_tiny_det",
       "model_dir": "../inference_models/PP-OCRv6_tiny_det_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_tiny_det",
+      "hf_revision": "d3177d4e5551463292a61e27cfca2b53e7c3fe9d",
       "default_opsets": [17],
       "input_kind": "det",
       "diff_tolerance": {
@@ -48,6 +49,7 @@
       "name": "ppocrv6_tiny_rec",
       "model_dir": "../inference_models/PP-OCRv6_tiny_rec_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_tiny_rec",
+      "hf_revision": "0736086f72f666350ebcdc0c3a504eeac89cdfad",
       "default_opsets": [17],
       "input_kind": "rec",
       "sample_inputs": {
@@ -62,6 +64,7 @@
       "name": "ppocrv6_small_det",
       "model_dir": "../inference_models/PP-OCRv6_small_det_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_small_det",
+      "hf_revision": "106c97591b235f607453300d9fc8c1cad1b25488",
       "default_opsets": [17],
       "input_kind": "det",
       "diff_tolerance": {
@@ -80,6 +83,7 @@
       "name": "ppocrv6_small_rec",
       "model_dir": "../inference_models/PP-OCRv6_small_rec_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_small_rec",
+      "hf_revision": "bd619643acac4b9650c040234da8d944476ee3f1",
       "default_opsets": [17],
       "input_kind": "rec",
       "sample_inputs": {
@@ -94,6 +98,7 @@
       "name": "ppocrv6_medium_det",
       "model_dir": "../inference_models/PP-OCRv6_medium_det_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_medium_det",
+      "hf_revision": "8e0f56fb2ef86b461d99cfc7ac5c137738985f61",
       "default_opsets": [17],
       "input_kind": "det",
       "diff_tolerance": {
@@ -112,6 +117,7 @@
       "name": "ppocrv6_medium_rec",
       "model_dir": "../inference_models/PP-OCRv6_medium_rec_infer",
       "hf_repo": "PaddlePaddle/PP-OCRv6_medium_rec",
+      "hf_revision": "e5a92bcbc5cc1b494628e458d267778f0704fd7c",
       "default_opsets": [17],
       "input_kind": "rec",
       "sample_inputs": {
